@@ -17,7 +17,7 @@ For help getting started with Flutter, view offical site
  $ git clone https://github.com/srplab/starcore_for_flutter
 ```
 
-##### a. download "starcore_for_android"
+- a. download "starcore_for_android"
 
 ```sh
  $ git clone https://github.com/srplab/starcore_for_android
@@ -26,7 +26,7 @@ For help getting started with Flutter, view offical site
 or download from
 [srplab：starcore_for_android.2.6.0.zip](http://www.srplab.com/data/starcore_for_android.2.6.0.zip).
 
-##### b. download "starcore_for_ios"
+- b. download "starcore_for_ios"
 
 ```sh
  $ git clone https://github.com/srplab/starcore_for_ios
@@ -36,18 +36,17 @@ or download from
 [srplab：starcore_for_ios.2.6.0.tar.gz](http://www.srplab.com/data/starcore_for_ios.2.6.0.tar.gz).
 
 
-### 2. Get source code
---------
+### 2. How to use, with an example of calling python
 
-##### a. Create project
+
+- a. Create project
 
 
 ```sh
 $ flutter create teststarflut
 ```
 
-##### b. Modify "pubspec.yaml", add "starflut" package
-
+- b. Modify "pubspec.yaml", add "starflut" package
 
 ```
 dev_dependencies:
@@ -56,4 +55,34 @@ dev_dependencies:
 
   starflut:
         path: ../starcore_for_flutter/starflut
+```
+
+- c. For android, add python share libraries as follow
+
+```
+android
+  app
+    src
+      main
+        assets
+          unicodedata.cpython-36m.so
+          zlib.cpython-36m.so
+        java
+        jniLibs
+          arm64-v8a
+            libpython3.6m.so
+            libstar_python36.so
+          armeabi 
+            libpython3.6m.so
+            libstar_python36.so
+          armeabi-v7a
+            libpython3.6m.so
+            libstar_python36.so
+          x86
+            libpython3.6m.so
+            libstar_python36.so
+          x86_64
+            libpython3.6m.so
+            libstar_python36.so
+        res
 ```
