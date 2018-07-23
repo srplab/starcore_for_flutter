@@ -1,0 +1,22 @@
+PODS:
+  - Flutter (1.0.0)
+  - starflut (0.5.0):
+    - Flutter
+
+DEPENDENCIES:
+  - Flutter (from `.symlinks/flutter/ios-release`)
+  - starflut (from `.symlinks/plugins/starflut/ios`)
+
+EXTERNAL SOURCES:
+  Flutter:
+    :path: ".symlinks/flutter/ios-release"
+  starflut:
+    :path: ".symlinks/plugins/starflut/ios"
+
+SPEC CHECKSUMS:
+  Flutter: 9d0fac939486c9aba2809b7982dfdbb47a7b0296
+  starflut: 3ddc93007364531803a9a42b98d376eb173afc89
+
+PODFILE CHECKSUM: 1e5af4103afd21ca5ead147d7b81d06f494f51a2
+
+COCOAPODS: 1.5.3

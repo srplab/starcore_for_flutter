@@ -1,6 +1,6 @@
 # starflut
 
-A new flutter plugin project, which supports flutter to interact with other scripting languages such as python, java, ruby, golang, rust, etc. It is easy to us, supports android and ios platform.
+A new flutter plugin project, which supports flutter to interact with other scripting languages such as python, java, ruby, golang, rust, etc. It is easy to use, supports android and ios platform.
 
 starflut is based on "starcore-for-android" and "starfore-for-ios project". 
 
@@ -87,55 +87,35 @@ android
         res
 ```
 
-- d. ** For ios, modify file "starcore_for_flutter/starflut/ios/starflut.podspec" **
+- d. ** For ios, define the environment variable based on the features used **
 
-1. set "starcore_path" to the folder of "starcore_for_ios"
-2. if starcore native service is used, set "starcore_moduleexport_define" and "starcore_moduleexport_call", 
-3. if python is used, uncomment "python config"
-4. if ruby is used, uncomment "ruby config"
-5. if golang module is used ,uncomment "golang config"
+1. set "STARCORE_PATH" to the folder of "starcore_for_ios"
+2. if starcore native service is used, set "STARCORE_EXPORTDEFINE" ,"STARCORE_EXPORTFUNCTION", "STARCORE_EXPORTLIBRARY", and ,  "STARCORE_EXPORTLIBRARYPATH"
+3. if python is used, set "STARCORE_PYTHONVERSION" and "STARCORE_PYTHONLIBRARY"
+4. if ruby is used, set "STARCORE_RUBYVERSION"
+5. if golang module is used ,set "STARCORE_GOLIBRARYPATH", where "libstar_go.a" and "libvsopenapi_c_stub.a" is located
 
 ```
-  #basic config
-  starcore_path = '$(HOME)/Desktop'
-  
-  starcore_moduleexport_define = 'extern\ \"C\"\ void\ *star_go_GetExportFunctionTable();' 
-        #begin
-        #  export function define of starcore service module, for example 
-        #
-        #  starcore_moduleexport_define = 'extern\ \"C\"\ void\ *xxx_GetExportFunctionTable();extern\ \"C\"\ void\ *yyy_GetExportFunctionTable();'
-        #=end
+STARCORE_PATH              # '/Users/srplab/Desktop/starcore_for_ios'
 
-  starcore_moduleexport_call = 'star_go_GetExportFunctionTable();'
-        #=begin
-        #  export function call of starcore service module, for example 
-        #
-        #  starcore_moduleexport_call = 'xxx_GetExportFunctionTable();yyy_GetExportFunctionTable();'
-        #=end
+STARCORE_PYTHONVERSION     # '3.6'   '3.5'    '2.7'
+STARCORE_PYTHONLIBRARY     # 'star_python36,python3.6m'
 
-  compiler_flags = '-Wno-unused-function -DENV_IOS' + ' -DENV_MODULEEXPORT='+starcore_moduleexport_define + ' -DENV_MODULECALL='+starcore_moduleexport_call
-  link_flags = 'iconv','stdc++','starcore'  # need linked with libstarcore.a
-  header_flags = starcore_path+'/starcore_for_ios/include'
-  library_flags = starcore_path+'/starcore_for_ios'
+STARCORE_RUBYVERSION       # '2.4'   '2.5
 
-  #python config
-  compiler_flags = compiler_flags + ' -DENV_WITHPYTHON=\"python3.6\"'    #support python  : python3.6,python3.5,python2.7
-  link_flags =  link_flags + ['star_python36','python3.6m','sqlite3','ssl','crypto']
-  library_flags = library_flags + ' '+starcore_path+'/starcore_for_ios/python.files/python-3.6'
+STARCORE_GOLIBRARYPATH     # '/Users/srplab/Desktop/go.study'
 
-  #ruby config
-  compiler_flags = compiler_flags + ' -DENV_WITHRUBY'
-  link_flags =  link_flags + ['star_ruby','ruby-exts','ruby-static','trans','sqlite3','ssl','crypto']
-  library_flags = library_flags + ' '+starcore_path+'/starcore_for_ios/ruby.files/ruby-2.4'
+STARCORE_EXPORTDEFINE      # 'extern\ \"C\"\ void\ *star_go_GetExportFunctionTable();'
+STARCORE_EXPORTFUNCTION    # 'star_go_GetExportFunctionTable();'
+STARCORE_EXPORTLIBRARY     # 'star_go,vsopenapi_c_stub'
+STARCORE_EXPORTLIBRARYPATH # '/Users/srplab/Desktop/go.study'
 
-  #golang config
-  link_flags =  link_flags + ['star_go','vsopenapi_c_stub']
-  library_flags = library_flags + ' '+starcore_path+'/go.study/stargo' + ' '+'/Users/srplab/Desktop/go.study/stargo/srplab/stargo/ios.static'
-
-  s.compiler_flags = compiler_flags
-  s.ios.library = link_flags
-  s.xcconfig = {'HEADER_SEARCH_PATHS' => header_flags,'LIBRARY_SEARCH_PATHS' => library_flags }
-
+for example
+$ flutter clean
+$ export STARCORE_PATH = '/Users/srplab/Desktop/starcore_for_ios'
+$ export STARCORE_PYTHONVERSION = '3.6'
+$ export STARCORE_PYTHONLIBRARY = STARCORE_PYTHONLIBRARY
+$ flutter build ios --no-codesign
 ```
 
 - d. ** Python file to be called **
