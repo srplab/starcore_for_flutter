@@ -21,7 +21,7 @@ bridge for flutter interact with other programming languages, such as c/c++ lua,
   s.dependency 'Flutter'
 
   #basic config
-  v_STARCORE_PATH = ENV['STARCORE_PATH']                             # '/Users/srplab/Desktop/starcore_for_ios'
+  v_STARCORE_PATH = ENV['STARCORE_PATH']                             # '/Users/srplab/Desktop'
   v_STARCORE_PYTHONVERSION = ENV['STARCORE_PYTHONVERSION']           # '3.6'   '3.5'    '2.7'
   v_STARCORE_PYTHONLIBRARY = ENV['STARCORE_PYTHONLIBRARY']           # 'star_python36,python3.6m'
   v_STARCORE_RUBYVERSION = ENV['STARCORE_RUBYVERSION']               # '2.4'   '2.5

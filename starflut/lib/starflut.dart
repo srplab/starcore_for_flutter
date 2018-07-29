@@ -15,6 +15,7 @@ typedef void DispatchRequestProc();
 note: 
   !! important  
   !! for dart does not support destruct function of class, so the starobject must be freed manually, or else will cause memory leak
+  !!    pushLocalFrame and popLocalFrame can be used to help releasing starobjects.
 
   !! starflut must be run in main ui thread.
 

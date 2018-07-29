@@ -49,6 +49,7 @@ import java.io.FileNotFoundException;
 */
 
 /** StarflutPlugin */
+@SuppressWarnings("unchecked")
 public class StarflutPlugin implements MethodCallHandler {
   private Activity activity;
   private MethodChannel channel;

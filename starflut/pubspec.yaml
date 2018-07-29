@@ -1,6 +1,6 @@
 name: starflut
 description: A new flutter plugin project,which supports flutter to interact with other scripting languages such as python, java, ruby, golang, rust, etc. It is easy to use, supports android and ios platform.
-version: 0.5.0
+version: 0.5.1
 author: srplab<srplab.cn@hotmail.com>
 homepage: http://www.srplab.com
 

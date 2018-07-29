@@ -96,7 +96,7 @@ android
 5. if golang module is used ,set "STARCORE_GOLIBRARYPATH", where "libstar_go.a" and "libvsopenapi_c_stub.a" is located
 
 ```
-STARCORE_PATH              # '/Users/srplab/Desktop/starcore_for_ios'
+STARCORE_PATH              # '/Users/srplab/Desktop'
 
 STARCORE_PYTHONVERSION     # '3.6'   '3.5'    '2.7'
 STARCORE_PYTHONLIBRARY     # 'star_python36,python3.6m'
@@ -112,9 +112,9 @@ STARCORE_EXPORTLIBRARYPATH # '/Users/srplab/Desktop/go.study'
 
 for example
 $ flutter clean
-$ export STARCORE_PATH = '/Users/srplab/Desktop/starcore_for_ios'
-$ export STARCORE_PYTHONVERSION = '3.6'
-$ export STARCORE_PYTHONLIBRARY = STARCORE_PYTHONLIBRARY
+$ export STARCORE_PATH='/Users/srplab/Desktop'
+$ export STARCORE_PYTHONVERSION='3.6'
+$ export STARCORE_PYTHONLIBRARY='star_python36,python3.6m'
 $ flutter build ios --no-codesign
 ```
 
