@@ -1,3 +1,9 @@
+## 0.5.2
+
+* release at 2018/08/03
+ - bug fix
+ - starcore upgrade to 2.6.5 for android
+
 ## 0.5.1
 
 * release at 2018/07/29

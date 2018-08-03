@@ -4,10 +4,16 @@ A new flutter plugin project, which supports flutter to interact with other scri
 
 starflut is based on "starcore-for-android" and "starfore-for-ios project". 
 
+Change at 2018/08/03
+--------
+
+### 0.5.2 version
+
+
 Change at 2018/07/30
 --------
 
-## New Post: [Flutter & Python](https://srplab.github.io/flutter/2018/07/29/flutter-and-python.html)
+### New Post: [Flutter & Python](https://srplab.github.io/flutter/2018/07/29/flutter-and-python.html)
 
 
 ## First release at 2018/07/22

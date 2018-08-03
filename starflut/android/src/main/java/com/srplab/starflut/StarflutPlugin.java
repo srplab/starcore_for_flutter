@@ -292,15 +292,15 @@ public class StarflutPlugin implements MethodCallHandler {
             channel.invokeMethod("starobjectclass_scriptproc" ,msg.obj, new Result() {
               @Override
               public void success(Object res_o) {
-                Object[] plist = processInputArgs((ArrayList<Object>)res_o);
-                Object o = (Object)plist[2];
-                Integer w_tag = (Integer)plist[0];
+                ArrayList<Object> plist = (ArrayList<Object>)res_o;
+                Object o = (Object)plist.get(2);
+                Integer w_tag = (Integer)plist.get(0);
                 if( w_tag != 0 ){
                   StarFlutWaitResult t_WaitResult = get_WaitResult(w_tag);
                   t_WaitResult.SetResult(o);
                 }else{
                   if( o != null ){
-                    System.out.println(String.format("Object function [%s] can not return value, for it is called in ui thread",(String)plist[1]));
+                    System.out.println(String.format("Object function [%s] can not return value, for it is called in ui thread",(String)plist.get(1)));
                   }
                 }
                 return;
@@ -435,13 +435,16 @@ public class StarflutPlugin implements MethodCallHandler {
           ArrayList<Object> ll = processOutputArgs(new Object[]{Result}); 
           out.add(ll.get(0));
         }else{
+          starcore._SRPLock(); 
           String StarObjectID = (String)((StarObjectClass)vv)._Get("_ID");
+          starcore._SRPUnLock();
           String CleObjectID = StarObjectPrefix+UUID.randomUUID().toString();
           CleObjectMap.put(CleObjectID,vv);
           out.add(CleObjectID + "+" + StarObjectID);
         }
       }else if( vv instanceof StarParaPkgClass ){
         StarParaPkgClass ParaPkg = (StarParaPkgClass)vv;
+        starcore._SRPLock();
         int Number = ParaPkg._GetInt("_Number");
         Object[] res = new Object[Number];
         for( int ii=0; ii < Number; ii++ ){
@@ -458,12 +461,15 @@ public class StarflutPlugin implements MethodCallHandler {
           }
           out.add(hm);
         }
+        starcore._SRPUnLock();
       }else if( vv instanceof StarBinBufClass ){
         String CleObjectID = StarBinBufPrefix+UUID.randomUUID().toString();
         CleObjectMap.put(CleObjectID,vv);
         out.add(CleObjectID);  
       }else if( vv instanceof StarServiceClass ){  
+        starcore._SRPLock();
         String ServiceID = (String)((StarServiceClass)vv)._Get("_ID");
+        starcore._SRPUnLock();
         String CleObjectID = StarServicePrefix+UUID.randomUUID().toString();
         CleObjectMap.put(CleObjectID,vv);       
         out.add(CleObjectID + "+" + ServiceID);              
@@ -1146,8 +1152,8 @@ public class StarflutPlugin implements MethodCallHandler {
             StarParaPkgClass l_ParaPkg = null;
             if( vv instanceof ArrayList<?> ){
               ArrayList<Object> parglist = (ArrayList<Object>)plist.get(1);
-              Object[] pp = processInputArgs(parglist);              
               starcore._SRPLock();
+              Object[] pp = processInputArgs(parglist);              
               l_ParaPkg = l_SrvGroup._NewParaPkg(pp);
               starcore._SRPUnLock();
             }else if( vv instanceof HashMap<?,?> ){
@@ -1157,8 +1163,8 @@ public class StarflutPlugin implements MethodCallHandler {
                 parglist.add(key);
                 parglist.add(s_m.get(key)); 
               }
-              Object[] pp = processInputArgs(parglist);              
               starcore._SRPLock();
+              Object[] pp = processInputArgs(parglist);                            
               l_ParaPkg = l_SrvGroup._NewParaPkg(pp);
               if( l_ParaPkg != null )
                 l_ParaPkg._AsDict(true);
@@ -1646,12 +1652,13 @@ public class StarflutPlugin implements MethodCallHandler {
               System.out.println(String.format("service object[%s] can not be found..",(String)plist.get(0)));
               return null;    
             }
-            ArrayList<Object> parglist = (ArrayList<Object>)plist.get(1);   
+            ArrayList<Object> parglist = (ArrayList<Object>)plist.get(1); 
+            starcore._SRPLock();  
             Object[] in_args = processInputArgs(parglist);
             if( in_args == null ){
+              starcore._SRPUnLock();
               return null;               
             }                
-            starcore._SRPLock();
             StarObjectClass Result = l_Service._New(in_args);
             if( Result != null ){
               String StarObjectID = (String)((StarObjectClass)Result)._Get("_ID");
@@ -1950,11 +1957,12 @@ public class StarflutPlugin implements MethodCallHandler {
             Object vv = plist.get(1); 
             if( vv instanceof ArrayList<?> ){
               ArrayList<Object> parglist = (ArrayList<Object>)vv;
+              starcore._SRPLock(); 
               Object[] in_args = processInputArgs(parglist);
               if( in_args == null ){
+                starcore._SRPUnLock();
                 return null;    
-              }
-              starcore._SRPLock();       
+              }      
               l_ParaPkg._Build(in_args);
               starcore._SRPUnLock();
             }else if( vv instanceof HashMap<?,?> ){
@@ -1964,8 +1972,8 @@ public class StarflutPlugin implements MethodCallHandler {
                 parglist.add(key);
                 parglist.add(s_m.get(key)); 
               }
-              Object[] in_args = processInputArgs(parglist);              
               starcore._SRPLock();
+              Object[] in_args = processInputArgs(parglist);              
               l_ParaPkg._Build(in_args);
               l_ParaPkg._AsDict(true);
               starcore._SRPUnLock();
@@ -2351,40 +2359,18 @@ public class StarflutPlugin implements MethodCallHandler {
             if( l_StarObject == null ){
               System.out.println(String.format("star object[%s] can not be found..",(String)plist.get(0)));
               return null;    
-            }      
+            } 
+            starcore._SRPLock();       
             ArrayList<Object> parglist = (ArrayList<Object>)plist.get(2);   
             Object[] in_args = processInputArgs(parglist);
             if( in_args == null ){
+              starcore._SRPUnLock();
               return null;               
-            }            
-            starcore._SRPLock();       
-            Object Result = l_StarObject._Call((String)plist.get(1),in_args);            
-            if( Result instanceof StarObjectClass ){
-              String StarObjectID = (String)((StarObjectClass)Result)._Get("_ID");
-              starcore._SRPUnLock();
-              String CleObjectID = StarObjectPrefix+UUID.randomUUID().toString();
-              CleObjectMap.put(CleObjectID,Result);   
-              return CleObjectID+"+"+StarObjectID;  
-            }else if( Result instanceof StarBinBufClass ){   
-              starcore._SRPUnLock();
-              String CleObjectID = StarBinBufPrefix+UUID.randomUUID().toString();
-              CleObjectMap.put(CleObjectID,Result);      
-              return CleObjectID;          
-            }else if( Result instanceof StarParaPkgClass ){ 
-              starcore._SRPUnLock();  
-              String CleObjectID = StarParaPkgPrefix+UUID.randomUUID().toString();
-              CleObjectMap.put(CleObjectID,Result);      
-              return CleObjectID;       
-            }else if( Result instanceof StarServiceClass ){  
-              String ServiceID = (String)((StarServiceClass)Result)._Get("_ID");
-              starcore._SRPUnLock();
-              String CleObjectID = StarServicePrefix+UUID.randomUUID().toString();
-              CleObjectMap.put(CleObjectID,Result);      
-              return CleObjectID;                                
-            }else{
-              starcore._SRPUnLock();
-              return Result;           
-            }
+            }                 
+            Object Result = l_StarObject._Call((String)plist.get(1),in_args); 
+            ArrayList<Object> out = processOutputArgs(new Object[]{Result});
+            starcore._SRPUnLock();
+            return out.get(0);      
           }
     case "StarObjectClass_newObject" : /*StarObjectClass_newObject*/
           {
@@ -2395,11 +2381,12 @@ public class StarflutPlugin implements MethodCallHandler {
               return null;    
             } 
             ArrayList<Object> parglist = (ArrayList<Object>)plist.get(1);   
+            starcore._SRPLock();
             Object[] in_args = processInputArgs(parglist);
             if( in_args == null ){
+              starcore._SRPUnLock();
               return null;               
             }               
-            starcore._SRPLock();
             StarObjectClass Result = l_StarObject._New(in_args);
             if( Result != null ){
               String StarObjectID = (String)((StarObjectClass)Result)._Get("_ID");
@@ -2579,11 +2566,15 @@ public class StarflutPlugin implements MethodCallHandler {
                   remove_WaitResult(w_tag);
                   starcore._SRPLock();
 
-                  if( result instanceof ArrayList<?> ){
-                    ArrayList<Object> ll = (ArrayList<Object>)result;
+                  //--process output result
+                  ArrayList<Object> b_Result = new ArrayList<Object>();
+                  b_Result.add(result);
+                  Object[] pResult = processInputArgs(b_Result);
+                  if( pResult[0] instanceof ArrayList<?> ){
+                    ArrayList<Object> ll = (ArrayList<Object>)pResult[0];
                     return ll.toArray(); 
                   }else{
-                    return result;     
+                    return pResult[0];     
                   }
                 }
               }); 

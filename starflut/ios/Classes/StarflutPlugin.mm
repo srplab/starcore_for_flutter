@@ -1772,7 +1772,9 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
                             break;
                         case starcore_ThreadTick_MethodCall :
                         {
+                            SRPControlInterface->SRPLock();
                             id value = [self handleMethodCall_Do:message->call];
+                            SRPControlInterface->SRPUnLock();
                             dispatch_async(dispatch_get_main_queue(), ^{
                                 message->result(value);  /*--run in ui thread--*/
                             });
