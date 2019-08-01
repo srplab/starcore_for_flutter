@@ -69,7 +69,7 @@ class _MyAppState extends State<MyApp> {
     String platformVersion;
     // Platform messages may fail, so we use a try/catch PlatformException.
     try {
-      int TestCase = 7;  //6 -- go //---5 ruby  //---4 ios //--3 call back;  //--2  call python //--1 android api //--0 develop
+      int TestCase = 8;  //7 -- lua //6 -- go //---5 ruby  //---4 ios //--3 call back;  //--2  call python //--1 android api //--0 develop
 
       if (TestCase == 0) {
         StarCoreFactory starcore = await Starflut.getFactory();
@@ -559,9 +559,72 @@ class _MyAppState extends State<MyApp> {
         StarObjectClass mymath = await lua["mymath"];
         print(await mymath.call("add",[3334,5666]));
 
+      }else if (TestCase == 8) {
+        StarCoreFactory starcore = await Starflut.getFactory();
+        StarServiceClass Service = await starcore.initSimple("test", "123", 0, 0, []);
+        print("$Service");
+        await starcore.regMsgCallBackP(
+            (int serviceGroupID, int uMsg, Object wParam, Object lParam) async{
+          print("$serviceGroupID  $uMsg   $wParam   $lParam");
+          return null;
+        });
+        await Service.checkPassword(false);
+        StarSrvGroupClass SrvGroup = await Service["_ServiceGroup"];
+        print("$SrvGroup");
+
+        String docPath = await Starflut.getDocumentPath();
+        print("docPath = $docPath");
+
+        String resPath = await Starflut.getResourcePath();
+        print("resPath = $resPath");
+
+        StarObjectClass testObj = await Service.newObject([]);
+
+		    await testObj.regScriptProcP("GetInfo", (StarObjectClass cleObject, List paras ) async {
+			    print("$paras");
+			    return ["return from go", {"pa":1, "pb":2, "pc":3},345.4];
+		      });        
+
+        StarObjectClass testObj_inst = await testObj.newObject([]);  
+        int InstNumber = await testObj.instNumber();
+        print("$InstNumber");
+
+        List allobjects = await Service.allObject();
+        print("$allobjects");
+
+        StarParaPkgClass ParaPkg = await SrvGroup.newParaPkg([
+          'aaaa',
+          234,
+          [345]
+        ]);
+
+        String val = await ParaPkg.v;
+        print("$val");
+
+        StarParaPkgClass ParaPkg1 = await SrvGroup.newParaPkg([
+          'aaaab',
+          234,
+          [345]
+        ]);
+        StarParaPkgClass ParaPkg2 = await SrvGroup.newParaPkg([
+          'aaaa',
+          234,
+          [345]
+        ]);        
+        bool e1 = await ParaPkg.equals(ParaPkg1);
+        print("$e1");
+        bool e2 = await ParaPkg.equals(ParaPkg2);
+        print("$e2");
+
+        String res = await testObj.jsonCall("{\"jsonrpc\": \"2.0\", \"method\": \"GetInfo\", \"params\": [34,{\"sape\":4139,\"jack\":4098}], \"id\": 1}");
+        print("$res");
+
+        String objid = await testObj.getValue("_ID");
+        List res1 = await Service.restfulCall("/"+objid+"/proc/GetInfo","POST","{\"params\": [34,{\"sape\":4139,\"jack\":4098}]}");
+        print("$res1");
       }
     } on PlatformException catch (e) {
-      print("{e.message}");
+      print("{$e.message}");
       platformVersion = 'Failed to get platform version.';
     }
 

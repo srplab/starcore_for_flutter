@@ -80,6 +80,8 @@ extern "C" void Init_openssl(void);
 #define starcore_setScript       215
 #define starcore_detachCurrentThread 216
 #define starcore_coreHandle      217
+#define starcore_captureScriptGIL 218
+#define starcore_releaseScriptGIL 219
 
 #define StarSrvGroupClass_toString 300
 #define StarSrvGroupClass_createService  301
@@ -128,6 +130,8 @@ extern "C" void Init_openssl(void);
 #define StarServiceClass_importRawContext 413
 #define StarServiceClass_getLastError 414
 #define StarServiceClass_getLastErrorInfo 415
+#define StarServiceClass_allObject 416
+#define StarServiceClass_restfulCall 417
 
 #define StarParaPkgClass_toString 500
 #define StarParaPkgClass_GetNumber 501
@@ -144,6 +148,8 @@ extern "C" void Init_openssl(void);
 #define StarParaPkgClass_fromJSon 512
 #define StarParaPkgClass_toJSon 513
 #define StarParaPkgClass_toTuple 514
+#define StarParaPkgClass_equals 515
+#define StarParaPkgClass_V 516
 
 #define StarBinBufClass_toString 600
 #define StarBinBufClass_GetOffset 601
@@ -171,7 +177,9 @@ extern "C" void Init_openssl(void);
 #define StarObjectClass_getLastErrorInfo 711
 #define StarObjectClass_releaseOwnerEx 712
 #define StarObjectClass_regScriptProcP 713
-
+#define StarObjectClass_instNumber 714
+#define StarObjectClass_changeParent 715
+#define StarObjectClass_jsonCall 716
 
 static NSNumber *fromBool(VS_BOOL val)
 {
@@ -684,7 +692,7 @@ static id StarParaPkg_GetAtIndex(class ClassOfSRPParaPackageInterface *ParaPkg, 
     return nil;
 }
 
-static id SRPObject_AttributeToFlutterObject(VS_UINT8 AttributeIndex, class ClassOfSRPInterface *SRPInterface, VS_UINT8 AttributeType, VS_INT32 AttributeLength, VS_UUID *StructID, VS_ULONG BufOffset, VS_UINT8 *Buf, VS_BOOL UseStructObject)
+static id SRPObject_AttributeToFlutterObject(VS_ATTRIBUTEINFO *AttributeInfo,VS_UINT8 AttributeIndex, class ClassOfSRPInterface *SRPInterface, VS_UINT8 AttributeType, VS_INT32 AttributeLength, VS_UUID *StructID, VS_ULONG BufOffset, VS_UINT8 *Buf, VS_BOOL UseStructObject)
 {
     void *AtomicStructObject;
     
@@ -737,6 +745,28 @@ static id SRPObject_AttributeToFlutterObject(VS_UINT8 AttributeIndex, class Clas
             }else{
                 return fromString(((VS_VSTRING *)&Buf[BufOffset]) -> Buf );
             }
+
+	case VSTYPE_PTR :
+		{
+			if( AttributeInfo->SyncType != 0 ){
+				void *SRPObject = SRPInterface ->QueryFirst(((void **)&Buf[BufOffset])[0]);
+				if( SRPObject == NULL )
+					return nil;
+                VS_UUID ObjectID;
+                class ClassOfSRPInterface *l_Service  =SRPInterface ->GetSRPInterface(SRPObject);
+                l_Service ->AddRefEx(SRPObject);
+                l_Service ->GetID(SRPObject, &ObjectID);
+                NSString *CleObjectID = [NSString stringWithFormat:@"%@%@",StarObjectPrefix,[[NSUUID UUID] UUIDString]];
+                [CleObjectMap setObject:fromPointer(SRPObject) forKey:CleObjectID];
+                return [NSString stringWithFormat:@"%@+%@",CleObjectID,fromString(l_Service->UuidToString(&ObjectID))];
+			}else{
+#if defined(VSPLAT_64)
+				return fromInt64(((VS_UWORD *)&Buf[BufOffset])[0]);
+#else
+				return fromInt32(((VS_UWORD *)&Buf[BufOffset])[0]);
+#endif
+			}			
+		}            
             
         case VSTYPE_STRUCT :
             AtomicStructObject = SRPInterface -> GetAtomicObject(StructID);
@@ -751,7 +781,7 @@ static id SRPObject_AttributeToFlutterObject(VS_UINT8 AttributeIndex, class Clas
                 NewObject = [[NSMutableArray alloc] init];
                 for(i=0;i<AttributeNumber;i++){
                     if( SRPInterface -> GetAtomicStructAttributeInfoEx( AtomicStructObject, i, &StructAttributeInfo ) == VS_TRUE ){
-                        id vv = SRPObject_AttributeToFlutterObject( StructAttributeInfo.AttributeIndex,SRPInterface,StructAttributeInfo.Type, StructAttributeInfo.Length,&StructAttributeInfo.StructID,StructAttributeInfo.Offset + BufOffset,(VS_UINT8 *)Buf,UseStructObject);
+                        id vv = SRPObject_AttributeToFlutterObject( &StructAttributeInfo,StructAttributeInfo.AttributeIndex,SRPInterface,StructAttributeInfo.Type, StructAttributeInfo.Length,&StructAttributeInfo.StructID,StructAttributeInfo.Offset + BufOffset,(VS_UINT8 *)Buf,UseStructObject);
                         if( vv != nil )
                             [NewObject addObject:vv];
                         else
@@ -1303,7 +1333,7 @@ id StarObject_getValue(class ClassOfSRPInterface *SRPInterface,void *SRPObject,i
     //---check if is object's attribute
     VS_ATTRIBUTEINFO AttributeInfo;
     if( SRPInterface -> GetAttributeInfoEx(SRPInterface -> GetClass(SRPObject),ParaName,&AttributeInfo) == VS_TRUE ){
-        return SRPObject_AttributeToFlutterObject( AttributeInfo.AttributeIndex,SRPInterface,AttributeInfo.Type, AttributeInfo.Length,&AttributeInfo.StructID,AttributeInfo.Offset,(VS_UINT8 *)SRPObject,VS_TRUE );
+        return SRPObject_AttributeToFlutterObject( &AttributeInfo,AttributeInfo.AttributeIndex,SRPInterface,AttributeInfo.Type, AttributeInfo.Length,&AttributeInfo.StructID,AttributeInfo.Offset,(VS_UINT8 *)SRPObject,VS_TRUE );
     }else{
         SRPInterface ->LuaPushObject(SRPObject);
         SRPInterface ->LuaPushString(ParaName);
@@ -1485,6 +1515,8 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
         [starcoreCmdMap setObject:[NSNumber numberWithInt:starcore_setScript] forKey:@"starcore_setScript"];
         [starcoreCmdMap setObject:[NSNumber numberWithInt:starcore_detachCurrentThread] forKey:@"starcore_detachCurrentThread"];
         [starcoreCmdMap setObject:[NSNumber numberWithInt:starcore_coreHandle] forKey:@"starcore_coreHandle"];
+        [starcoreCmdMap setObject:[NSNumber numberWithInt:starcore_captureScriptGIL] forKey:@"starcore_captureScriptGIL"];
+        [starcoreCmdMap setObject:[NSNumber numberWithInt:starcore_releaseScriptGIL] forKey:@"starcore_releaseScriptGIL"];           
         
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarSrvGroupClass_toString] forKey:@"StarSrvGroupClass_toString"];
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarSrvGroupClass_createService] forKey:@"StarSrvGroupClass_createService"];
@@ -1533,6 +1565,8 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarServiceClass_importRawContext] forKey:@"StarServiceClass_importRawContext"];
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarServiceClass_getLastError] forKey:@"StarServiceClass_getLastError"];
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarServiceClass_getLastErrorInfo] forKey:@"StarServiceClass_getLastErrorInfo"];
+        [starcoreCmdMap setObject:[NSNumber numberWithInt:StarServiceClass_allObject] forKey:@"StarServiceClass_allObject"];
+        [starcoreCmdMap setObject:[NSNumber numberWithInt:StarServiceClass_restfulCall] forKey:@"StarServiceClass_restfulCall"];
 
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarParaPkgClass_toString] forKey:@"StarParaPkgClass_toString"];
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarParaPkgClass_GetNumber] forKey:@"StarParaPkgClass_GetNumber"];
@@ -1549,6 +1583,8 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarParaPkgClass_fromJSon] forKey:@"StarParaPkgClass_fromJSon"];
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarParaPkgClass_toJSon] forKey:@"StarParaPkgClass_toJSon"];
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarParaPkgClass_toTuple] forKey:@"StarParaPkgClass_toTuple"];
+        [starcoreCmdMap setObject:[NSNumber numberWithInt:StarParaPkgClass_equals] forKey:@"StarParaPkgClass_equals"];
+        [starcoreCmdMap setObject:[NSNumber numberWithInt:StarParaPkgClass_V] forKey:@"StarParaPkgClass_V"];
         
 
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarBinBufClass_toString] forKey:@"StarBinBufClass_toString"];
@@ -1577,7 +1613,9 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarObjectClass_getLastErrorInfo] forKey:@"StarObjectClass_getLastErrorInfo"];
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarObjectClass_releaseOwnerEx] forKey:@"StarObjectClass_releaseOwnerEx"];
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarObjectClass_regScriptProcP] forKey:@"StarObjectClass_regScriptProcP"];
-
+        [starcoreCmdMap setObject:[NSNumber numberWithInt:StarObjectClass_instNumber] forKey:@"StarObjectClass_instNumber"];
+        [starcoreCmdMap setObject:[NSNumber numberWithInt:StarObjectClass_changeParent] forKey:@"StarObjectClass_changeParent"];
+        [starcoreCmdMap setObject:[NSNumber numberWithInt:StarObjectClass_jsonCall] forKey:@"StarObjectClass_jsonCall"];
     }
     return self;
 }
@@ -2178,6 +2216,16 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
         {
             return [NSNumber numberWithLongLong:0xFFFFFFFFFFFFFFFF];
         }
+        case starcore_captureScriptGIL :
+        {
+            SRPControlInterface->CaptureScriptGIL(NULL, NULL);
+            return nil;
+        }
+        case starcore_releaseScriptGIL :
+        {
+            SRPControlInterface->ReleaseScriptGIL(NULL, NULL);
+            return nil;
+        }                
             
         /*-----------------------------------------------*/
         case StarSrvGroupClass_toString :
@@ -2956,6 +3004,57 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
             return fromString(TextBuf);
         }
             
+        case StarServiceClass_allObject :
+        {
+            NSArray *plist = (NSArray *)call.arguments;
+            class ClassOfSRPInterface *l_Service = (class ClassOfSRPInterface *)toPointer([CleObjectMap objectForKey:[plist objectAtIndex:0]]);
+            if( l_Service == NULL ){
+                NSLog(@"service object[%@] can not be found..",[plist objectAtIndex:0]);
+                return [[NSMutableArray alloc] init];
+            }
+            VS_PARAPKGPTR RetParaPkg;
+            RetParaPkg = l_Service -> AllObject();
+            if( RetParaPkg->GetNumber() == 0){
+                RetParaPkg->Release();
+                return [[NSMutableArray alloc] init];
+            }else{
+                NSMutableArray *res = [[NSMutableArray alloc] init];
+                for( int i=0; i < RetParaPkg->GetNumber(); i++ ){
+                    id vv = StarParaPkg_GetAtIndex(RetParaPkg,i);
+                    if( vv != nil )
+                        [res addObject:vv];
+                    else
+                        [res addObject:[NSNull null]];
+                }
+                return res;
+            }
+        }
+
+        case StarServiceClass_restfulCall :
+        {
+            NSArray *plist = (NSArray *)call.arguments;
+            class ClassOfSRPInterface *l_Service = (class ClassOfSRPInterface *)toPointer([CleObjectMap objectForKey:[plist objectAtIndex:0]]);
+            if( l_Service == NULL ){
+                return [[NSArray alloc] initWithObjects:fromInt32(400),fromString((VS_CHAR *)"{\"code\": -32600, \"message\": \"call _RestfulCall failed,input para error\"}"),nil];
+            }
+            VS_CHAR *Url = toString([plist objectAtIndex:1]);
+	        VS_CHAR *OpCode = toString([plist objectAtIndex:2]);
+	        VS_CHAR *JsonString = toString([plist objectAtIndex:3]);
+	        VS_INT32 ResultCode;
+	        VS_CHAR *Result;
+
+            if( Url == NULL || OpCode == NULL ){
+                return [[NSArray alloc] initWithObjects:fromInt32(400),fromString((VS_CHAR *)"{\"code\": -32600, \"message\": \"call _RestfulCall failed,input para error\"}"),nil];
+            }    
+	        if( JsonString == NULL ){
+		        Result = l_Service -> RestfulCall( Url, OpCode, NULL,&ResultCode);
+                return [[NSArray alloc] initWithObjects:fromInt32(ResultCode),fromString(Result),nil];
+  	        }else{
+		        Result = l_Service -> RestfulCall( Url, OpCode, JsonString,&ResultCode);
+                return [[NSArray alloc] initWithObjects:fromInt32(ResultCode),fromString(Result),nil];                  
+	        }    
+        }           
+
         /*-----------------------------------------------*/
         case StarParaPkgClass_toString :
         {
@@ -2965,7 +3064,17 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
                 NSLog(@"parapkg object[%@] can not be found..",[plist objectAtIndex:0]);
                 return @"";
             }
-            return @"parapkg";
+			class ClassOfSRPParaPackageInterface* ResultParaPkg = l_ParaPkg ->GetDesc();
+			VS_CHAR *JsonStr = ResultParaPkg->ToJSon();
+            NSString *ResultObject;
+			if( JsonStr == NULL )
+				ResultObject = @"parapkg";
+			else{
+				ResultObject = fromString(JsonStr);
+				ResultParaPkg->FreeBuf(JsonStr);
+			}
+			ResultParaPkg->Release();
+			return ResultObject;            
         }
         case StarParaPkgClass_GetNumber :
         {
@@ -3026,6 +3135,36 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
             }
             return fromBool(l_ParaPkg -> AppendFrom(s_ParaPkg));
         }
+        case StarParaPkgClass_equals :
+        {
+            NSArray *plist = (NSArray *)call.arguments;
+            class ClassOfSRPParaPackageInterface *l_ParaPkg = (class ClassOfSRPParaPackageInterface *)toPointer([CleObjectMap objectForKey:[plist objectAtIndex:0]]);
+            if( l_ParaPkg == NULL ){
+                NSLog(@"parapkg object[%@] can not be found..",[plist objectAtIndex:0]);
+                return fromBool(VS_FALSE);
+            }
+            class ClassOfSRPParaPackageInterface *s_ParaPkg = (class ClassOfSRPParaPackageInterface *)toPointer([CleObjectMap objectForKey:[plist objectAtIndex:1]]);
+            if( s_ParaPkg == NULL ){
+                NSLog(@"parapkg object[%@] can not be found..",[plist objectAtIndex:1]);
+                return fromBool(VS_FALSE);
+            }
+            return fromBool(l_ParaPkg -> Equals(s_ParaPkg));
+        }        
+        case StarParaPkgClass_V :
+        {
+            NSArray *plist = (NSArray *)call.arguments;
+            class ClassOfSRPParaPackageInterface *l_ParaPkg = (class ClassOfSRPParaPackageInterface *)toPointer([CleObjectMap objectForKey:[plist objectAtIndex:0]]);
+            if( l_ParaPkg == NULL ){
+                NSLog(@"parapkg object[%@] can not be found..",[plist objectAtIndex:0]);
+                return @"";
+            }
+			VS_CHAR *CharValue = l_ParaPkg -> GetValueStr();
+			if( CharValue == NULL )
+				return @"";
+			else{
+                return fromString(CharValue);
+			}
+        }        
         case StarParaPkgClass_set :
         {
             NSArray *plist = (NSArray *)call.arguments;
@@ -3833,6 +3972,75 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
             return nil;
         }
             
+        case StarObjectClass_instNumber :
+        {
+            NSArray *plist = (NSArray *)call.arguments;
+            void *l_StarObject = (void *)toPointer([CleObjectMap objectForKey:[plist objectAtIndex:0]]);
+            if( l_StarObject == NULL ){
+                NSLog(@"star object[%@] can not be found..",[plist objectAtIndex:0]);
+                return fromInt32(0);
+            }
+            class ClassOfSRPInterface *l_Service = SRPInterface->GetSRPInterface(l_StarObject);
+            return fromInt32(l_Service -> InstNumberEx(l_StarObject));
+        }            
+        case StarObjectClass_changeParent :
+        {
+            NSArray *plist = (NSArray *)call.arguments;
+            void *l_StarObject = (void *)toPointer([CleObjectMap objectForKey:[plist objectAtIndex:0]]);
+            if( l_StarObject == NULL ){
+                NSLog(@"star object[%@] can not be found..",[plist objectAtIndex:0]);
+                return nil;
+            }
+            class ClassOfSRPInterface *l_Service = SRPInterface->GetSRPInterface(l_StarObject);
+            NSString *parentObjectTag = [plist objectAtIndex:1];
+            if( parentObjectTag == nil || [parentObjectTag isKindOfClass:[NSNull class]] ){
+                l_Service->ChangeParent(l_StarObject,NULL,0);
+                return nil;
+            }
+            void *l_ParentObject = (void *)toPointer([CleObjectMap objectForKey:parentObjectTag]);
+            if( l_ParentObject == NULL ){
+                NSLog(@"star object[%@] can not be found..",parentObjectTag);
+                return nil;
+            }            
+            VS_ATTRIBUTEINFO AttributeInfo;
+            VS_INT32 i,AttributeNumber;
+            VS_CHAR *QueueAttrName = toString([plist objectAtIndex:2]);
+		    if( QueueAttrName != NULL ){
+			    if( l_Service -> GetAttributeInfoEx( l_ParentObject, QueueAttrName, &AttributeInfo ) == VS_FALSE ){
+				    return nil;
+			    }
+		    }else{
+			    AttributeNumber = l_Service -> GetAttributeNumber(SRPInterface -> GetClass(l_ParentObject));
+			    for( i=0; i < AttributeNumber; i++ ){
+				  l_Service -> GetAttributeInfo( l_Service -> GetClass(l_ParentObject), i, &AttributeInfo );
+				  if( AttributeInfo.Type == VSTYPE_PTR && AttributeInfo.SyncType == VS_TRUE && ( l_Service -> IsInst(&AttributeInfo.StructID,l_StarObject) == VS_TRUE || UUID_ISINVALID(AttributeInfo.StructID) ) )
+					break;
+			    }
+			    if( i >= AttributeNumber ){
+				  return nil;
+			    }
+		    }
+		    l_Service -> ChangeParent( l_StarObject, l_ParentObject, AttributeInfo.AttributeIndex );
+            return nil;
+        }                   
+
+        case StarObjectClass_jsonCall :
+        {
+            NSArray *plist = (NSArray *)call.arguments;
+            void *l_StarObject = (void *)toPointer([CleObjectMap objectForKey:[plist objectAtIndex:0]]);
+            if( l_StarObject == NULL ){
+                NSLog(@"star object[%@] can not be found..",[plist objectAtIndex:0]);
+                return @"{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32603, \"message\": \"call _JSonCall failed,Internal error\"}, \"id\": null}";
+            }
+            class ClassOfSRPInterface *l_Service = SRPInterface->GetSRPInterface(l_StarObject);
+            VS_CHAR *InputStr = toString([plist objectAtIndex:1]);
+   	        if( InputStr == NULL){
+                return @"{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32603, \"message\": \"call _JSonCall failed,Internal error\"}, \"id\": null}";
+            }
+	        VS_CHAR *ResultStr = l_Service -> JSonCall( l_StarObject, InputStr);
+            return fromString(ResultStr);
+        }
+
         default:
             return nil;
     }

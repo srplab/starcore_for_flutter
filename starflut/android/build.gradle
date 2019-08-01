@@ -34,5 +34,5 @@ android {
 }
 
 dependencies {
-    compile files('libs/starcore_android_r2.60.jar')
+    compile files('libs/starcore_android_r3.5.jar')
 }

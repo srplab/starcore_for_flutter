@@ -4,6 +4,23 @@ A new flutter plugin project, which supports flutter to interact with other scri
 
 starflut is based on "starcore-for-android" and "starfore-for-ios project". 
 
+## 0.6.0 version  2019/08/01
+
+* support starcore 3.5.0
+* support python 3.7
+* Newly added API Interface:
+> StarServiceClass:
+  >> [allObject](#)            : Future<List> allObject() async 
+  >> [restfulCall](#)          : Future<List> restfulCall (String url, String opCode, String jsonString) async
+
+> StarParaPkg:
+  >> [equals](#)               : Future<bool> equals (StarParaPkgClass srcParaPkg) async
+  >> [v](#)                    : Future<String> get ValueStr async
+
+> StarObject :
+  >> [instNumber](#)           : Future<int> instNumber () async
+  >> [jsonCall](#)             : Future<String> jsonCall (String jsonString) async
+
 ## First release at 2018/07/22
 
 ## Getting Started
@@ -19,21 +36,11 @@ For help getting started with Flutter, view offical site
 
 - a. ** download "starcore_for_android" **
 
-```sh
- $ git clone https://github.com/srplab/starcore_for_android
-```
-
-or download from
-[srplab：starcore_for_android.2.6.0.zip](http://www.srplab.com/data/starcore_for_android.2.6.0.zip).
+[srplab：starcore_for_android.3.5.0.zip](https://github.com/srplab/starcore_for_android/raw/master/starcore_for_android.3.5.0.zip).
 
 - b. ** download "starcore_for_ios" **
 
-```sh
- $ git clone https://github.com/srplab/starcore_for_ios
-```
-
-or download from
-[srplab：starcore_for_ios.2.6.0.tar.gz](http://www.srplab.com/data/starcore_for_ios.2.6.0.tar.gz).
+[srplab：starcore_for_ios.3.5.0.tar.gz](https://github.com/srplab/starcore_for_ios/raw/master/starcore_for_ios.3.5.0.tar.gz).
 
 
 ### 2. How to use, with an example of calling python

@@ -3,7 +3,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'starflut'
-  s.version          = '0.5.0'
+  s.version          = '0.6.0'
   s.summary          = 'bridge for flutter interact with other programming languages'
   s.description      = <<-DESC
 bridge for flutter interact with other programming languages, such as c/c++ lua, python, ruby, golang, rust, etc.
@@ -22,7 +22,7 @@ bridge for flutter interact with other programming languages, such as c/c++ lua,
 
   #basic config
   v_STARCORE_PATH = ENV['STARCORE_PATH']                             # '/Users/srplab/Desktop'
-  v_STARCORE_PYTHONVERSION = ENV['STARCORE_PYTHONVERSION']           # '3.6'   '3.5'    '2.7'
+  v_STARCORE_PYTHONVERSION = ENV['STARCORE_PYTHONVERSION']           # '3.7' '3.6'   '3.5'    '2.7'
   v_STARCORE_PYTHONLIBRARY = ENV['STARCORE_PYTHONLIBRARY']           # 'star_python36,python3.6m'
   v_STARCORE_RUBYVERSION = ENV['STARCORE_RUBYVERSION']               # '2.4'   '2.5
   v_STARCORE_GOLIBRARYPATH = ENV['STARCORE_GOLIBRARYPATH']           # '/Users/srplab/Desktop/go.study'

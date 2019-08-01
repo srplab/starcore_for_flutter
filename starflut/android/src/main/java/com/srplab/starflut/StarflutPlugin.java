@@ -1069,6 +1069,22 @@ public class StarflutPlugin implements MethodCallHandler {
             starcore._SRPUnLock();
             return Result;                   
           }
+
+    case "starcore_captureScriptGIL" : /*starcore_captureScriptGIL*/
+          {
+            starcore._SRPLock();
+            starcore._CaptureScriptGIL();
+            starcore._SRPUnLock();
+            return true;                   
+          }   
+          
+    case "starcore_releaseScriptGIL" : /*starcore_releaseScriptGIL*/
+          {
+            starcore._SRPLock();
+            starcore._ReleaseScriptGIL();
+            starcore._SRPUnLock();
+            return true;                   
+          }           
           
     /*-----------------------------------------------*/
     case "StarSrvGroupClass_toString" : /*StarSrvGroupClass_toString*/
@@ -1828,6 +1844,44 @@ public class StarflutPlugin implements MethodCallHandler {
             return Result;                 
           }
           
+    case "StarServiceClass_allObject" : /*StarServiceClass_allObject*/
+          {           
+              ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
+              StarServiceClass l_Service = (StarServiceClass)CleObjectMap.get((String)plist.get(0));
+              if( l_Service == null ){
+                System.out.println(String.format("service object[%s] can not be found..",(String)plist.get(0)));
+                return processOutputArgs(new Object[]{false,"error..."});    
+              }             
+              starcore._SRPLock();
+              StarParaPkgClass RetObject = l_Service._AllObject();
+              int itemNum = RetObject._GetInt("_Number");
+              if( itemNum == 0 ){
+                RetObject._Dispose();
+                starcore._SRPUnLock();
+                return processOutputArgs(new Object[0]);
+              }else{
+                Object[] Result = new Object[itemNum];
+                for( int ii=0; ii < itemNum; ii++)
+                  Result[ii] = RetObject._Get(ii);
+                  RetObject._Dispose();
+                starcore._SRPUnLock();              
+                return processOutputArgs(Result);   
+              }              
+          }           
+
+    case "StarServiceClass_restfulCall" : /*StarServiceClass_restfulCall*/
+          {
+            ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
+            StarServiceClass l_Service = (StarServiceClass)CleObjectMap.get((String)plist.get(0));
+            if( l_Service == null ){
+              System.out.println(String.format("service object[%s] can not be found..",(String)plist.get(0)));
+              return processOutputArgs(new Object[]{400,"{\"code\": -32600, \"message\": \"call _RestfulCall failed,input para error\"}"});    
+            }    
+            starcore._SRPLock();
+            Object[] Result = l_Service._RestfulCall((String)plist.get(1),(String)plist.get(2),(String)plist.get(3));
+            starcore._SRPUnLock();              
+            return processOutputArgs(Result);    
+          }             
     /*-----------------------------------------------*/
     case "StarParaPkgClass_toString" : /*StarParaPkgClass_toString*/
           {
@@ -1855,7 +1909,20 @@ public class StarflutPlugin implements MethodCallHandler {
             int ii = l_ParaPkg._GetInt("_Number");
             starcore._SRPUnLock();
             return ii;          
-          }
+          }   
+    case "StarParaPkgClass_V" : /*StarParaPkgClass_V*/
+          {
+            ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
+            StarParaPkgClass l_ParaPkg = (StarParaPkgClass)CleObjectMap.get((String)plist.get(0));
+            if( l_ParaPkg == null ){
+              System.out.println(String.format("parapkg object[%s] can not be found..",(String)plist.get(0)));
+              return "";    
+            }
+            starcore._SRPLock();
+            String val = ""+l_ParaPkg._Get("_V");
+            starcore._SRPUnLock();
+            return val;          
+          }             
     case "StarParaPkgClass_get" : /*StarParaPkgClass_get*/
           {
             ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
@@ -1915,6 +1982,24 @@ public class StarflutPlugin implements MethodCallHandler {
             starcore._SRPUnLock();  
             return val;          
           }
+    case "StarParaPkgClass_equals" : /*StarParaPkgClass_equals*/
+          {
+            ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
+            StarParaPkgClass l_ParaPkg = (StarParaPkgClass)CleObjectMap.get((String)plist.get(0));
+            if( l_ParaPkg == null ){
+              System.out.println(String.format("parapkg object[%s] can not be found..",(String)plist.get(0)));
+              return false;    
+            }
+            StarParaPkgClass s_ParaPkg = (StarParaPkgClass)CleObjectMap.get((String)plist.get(1));
+            if( s_ParaPkg == null ){
+              System.out.println(String.format("parapkg object[%s] can not be found..",(String)plist.get(1)));
+              return false;    
+            }            
+            starcore._SRPLock();
+            boolean val = l_ParaPkg._Equals(s_ParaPkg);
+            starcore._SRPUnLock();  
+            return val;          
+          }          
     case "StarParaPkgClass_set" : /*StarParaPkgClass_set*/
           {
             ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
@@ -2581,7 +2666,60 @@ public class StarflutPlugin implements MethodCallHandler {
             }
             starcore._SRPUnLock();
             return 0;                   
-          }                                           
+          }       
+    case "StarObjectClass_instNumber" : /*StarObjectClass_instNumber*/
+          {
+            ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
+            StarObjectClass l_StarObject = (StarObjectClass)CleObjectMap.get((String)plist.get(0));
+            if( l_StarObject == null ){
+              System.out.println(String.format("star object[%s] can not be found..",(String)plist.get(0)));
+              return 0;    
+            }    
+            starcore._SRPLock();
+            int Result = l_StarObject._InstNumber();
+            starcore._SRPUnLock();
+            return Result;                 
+          }    
+    case "StarObjectClass_changeParent" : /*StarObjectClass_changeParent*/
+          {
+            ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
+            StarObjectClass l_StarObject = (StarObjectClass)CleObjectMap.get((String)plist.get(0));
+            if( l_StarObject == null ){
+              System.out.println(String.format("star object[%s] can not be found..",(String)plist.get(0)));
+              return null;    
+            }    
+            if( (String)plist.get(0) == null ){
+              starcore._SRPLock();
+              l_StarObject._ChangeParent(null,"");
+              starcore._SRPUnLock();
+              return null;    
+            }else{
+              StarObjectClass l_ParentObject = (StarObjectClass)CleObjectMap.get((String)plist.get(1));
+              if( l_ParentObject == null ){
+                System.out.println(String.format("parent object[%s] can not be found..",(String)plist.get(1)));
+                return null;       
+              }         
+              starcore._SRPLock();
+              l_StarObject._ChangeParent(l_ParentObject,(String)plist.get(2));
+              starcore._SRPUnLock();
+              return null;
+            }                 
+          }    
+          
+    case "StarObjectClass_jsonCall" : /*StarServiceClass_jsonCall*/
+          {
+            ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
+            StarObjectClass l_StarObject = (StarObjectClass)CleObjectMap.get((String)plist.get(0));
+            if( l_StarObject == null ){
+              System.out.println(String.format("star object[%s] can not be found..",(String)plist.get(0)));
+              return "{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32603, \"message\": \"call _JSonCall failed,Internal error\"}, \"id\": null}";    
+            } 
+            starcore._SRPLock();
+            String Result = l_StarObject._JSonCall((String)plist.get(1));
+            starcore._SRPUnLock();
+            return Result;                 
+          }
+
     default:
           return null;
     } 
