@@ -3,7 +3,7 @@
   <component name="ProjectModuleManager">
     <modules>
       <module fileurl="file://$PROJECT_DIR$/starflut_example.iml" filepath="$PROJECT_DIR$/starflut_example.iml" />
-      <module fileurl="file://$PROJECT_DIR$/starflut_example_android.iml" filepath="$PROJECT_DIR$/starflut_example_android.iml" />
+      <module fileurl="file://$PROJECT_DIR$/android/starflut_example_android.iml" filepath="$PROJECT_DIR$/android/starflut_example_android.iml" />
     </modules>
   </component>
 </project>

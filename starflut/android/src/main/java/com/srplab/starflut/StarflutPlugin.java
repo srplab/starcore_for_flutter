@@ -1,5 +1,10 @@
 package com.srplab.starflut;
 
+import androidx.annotation.NonNull;
+
+import io.flutter.embedding.engine.plugins.FlutterPlugin;
+import io.flutter.embedding.engine.plugins.activity.ActivityAware;
+import io.flutter.embedding.engine.plugins.activity.ActivityPluginBinding;
 import io.flutter.plugin.common.MethodCall;
 import io.flutter.plugin.common.MethodChannel;
 import io.flutter.plugin.common.MethodChannel.MethodCallHandler;
@@ -50,22 +55,22 @@ import java.io.FileNotFoundException;
 
 /** StarflutPlugin */
 @SuppressWarnings("unchecked")
-public class StarflutPlugin implements MethodCallHandler {
+public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallHandler {
   private Activity activity;
   private MethodChannel channel;
   private BasicMessageChannel messagechannel;
   HashMap<String,Object> CleObjectMap;
-  private Handler mainHandler;
+  private Handler mainHandler = null;
 
   private Object starCoreThreadCallDeepSyncObject;
-  private int starCoreThreadCallDeep;
+  private int starCoreThreadCallDeep = 0;
 
   private Thread starCoreHandlerThread;
-  private Handler starCoreHandler;
+  private Handler starCoreHandler = null;
   private Looper starCoreHandlerLooper;
 
 
-  boolean StarCoreInitFlag;
+  boolean StarCoreInitFlag = false;
   StarCoreFactory starcore;
 
   final String StarCorePrefix =     "@s_s_c";
@@ -167,10 +172,10 @@ public class StarflutPlugin implements MethodCallHandler {
     }
   }  
 
-  void copyFile(Activity c, String Name,String srcPath,String desPath) throws IOException {
+  void copyFile(Activity c, String Name,String srcPath,String desPath,boolean OverWriteFlag) throws IOException {
     File outfile = null;
     outfile = new File(desPath+"/"+Name);
-    //if (!outfile.exists()) {
+    if (OverWriteFlag == true || (!outfile.exists()))
     {
         outfile.createNewFile();
         FileOutputStream out = new FileOutputStream(outfile);
@@ -226,18 +231,23 @@ public class StarflutPlugin implements MethodCallHandler {
   final int starcore_msgCallBack_MessageID = 1;
   final int starobjecrclass_ScriptCallBack_MessageID = 2;
 
-  public StarflutPlugin(Activity activity,MethodChannel in_channel,BasicMessageChannel in_messagechannel) {
-      this.activity = activity;
-      this.channel = in_channel;
-      CleObjectMap = new HashMap<String,Object>();
-      g_WaitResultMap = new HashMap<Integer,StarFlutWaitResult>();
+  public void StarflutPlugin_Init() {
+      CleObjectMap = new HashMap<String, Object>();
+      g_WaitResultMap = new HashMap<Integer, StarFlutWaitResult>();
       g_WaitResultMap_mutexObject = new Object();
-      g_WaitResultMap_Index = 1;      
+      g_WaitResultMap_Index = 1;
 
       mainThreadID = Thread.currentThread().getId();
       starCoreThreadCallDeep = 0;
       starCoreThreadCallDeepSyncObject = new Object();
 
+      StarCoreInitFlag = false;
+      mutexObject = new Object();
+      ExitAppFlag = false;
+  }
+
+  public void StarflutPlugin_Init_Handler(Activity activity) {
+      this.activity = activity;
       mainHandler = new android.os.Handler(Looper.getMainLooper()){
         //--this will be run in mainthread, and process callback from native to dart
         public void handleMessage(Message msg) {
@@ -318,10 +328,6 @@ public class StarflutPlugin implements MethodCallHandler {
           }
         }
     };
-
-      StarCoreInitFlag = false;
-      mutexObject = new Object();
-      ExitAppFlag = false;      
   }  
 
   Integer get_WaitResultIndex()
@@ -361,16 +367,57 @@ public class StarflutPlugin implements MethodCallHandler {
     {
       g_WaitResultMap.remove(Index);
     }  
-  }    
-
-  /** Plugin registration. */
-  public static void registerWith(Registrar registrar) {
-    final MethodChannel channel = new MethodChannel(registrar.messenger(), "starflut");
-    final BasicMessageChannel messagechannel = new BasicMessageChannel(registrar.messenger(),"starflut_message",new StandardMessageCodec());
-    channel.setMethodCallHandler(new StarflutPlugin(registrar.activity(),channel,messagechannel));
   }
 
-  Object[] processInputArgs(ArrayList<Object> parglist)
+  /// The MethodChannel that will the communication between Flutter and native Android
+  ///
+  /// This local reference serves to register the plugin with the Flutter Engine and unregister it
+  /// when the Flutter Engine is detached from the Activity
+
+  @Override
+  public void onAttachedToEngine(@NonNull FlutterPluginBinding flutterPluginBinding) {
+      channel = new MethodChannel(flutterPluginBinding.getBinaryMessenger(), "starflut");
+      channel.setMethodCallHandler(this);
+      StarflutPlugin_Init();
+  }
+
+  @Override
+  public void onDetachedFromEngine(@NonNull FlutterPluginBinding binding) {
+      channel.setMethodCallHandler(null);
+  }
+
+  boolean StarflutPlugin_IsDetached = true;
+  boolean StarflutPlugin_Init_Handler_IsDone = false;
+    @Override
+    public void onAttachedToActivity(ActivityPluginBinding activityPluginBinding) {
+        StarflutPlugin_IsDetached = false;
+        // TODO: your plugin is now attached to an Activity
+        if( StarflutPlugin_Init_Handler_IsDone == false) {
+            StarflutPlugin_Init_Handler(activityPluginBinding.getActivity());
+            StarflutPlugin_Init_Handler_IsDone = true;
+        }
+    }
+
+    @Override
+    public void onDetachedFromActivityForConfigChanges() {
+        // TODO: the Activity your plugin was attached to was destroyed to change configuration.
+        // This call will be followed by onReattachedToActivityForConfigChanges().
+    }
+
+    @Override
+    public void onReattachedToActivityForConfigChanges(ActivityPluginBinding activityPluginBinding) {
+        // TODO: your plugin is now attached to a new Activity after a configuration change.
+    }
+
+    @Override
+    public void onDetachedFromActivity() {
+        // TODO: your plugin is no longer associated with an Activity. Clean up references.
+        StarflutPlugin_IsDetached = true;
+        System.out.println("Important warning : starflut can not recover from detach state, please exit the app and run it again !!!");
+    }
+
+
+    Object[] processInputArgs(ArrayList<Object> parglist)
   {
     Object[] out = new Object[parglist.size()];
     for( int i=0; i < parglist.size(); i++ ){
@@ -554,17 +601,21 @@ public class StarflutPlugin implements MethodCallHandler {
   /*https://docs.flutter.io/flutter/services/MethodCall-class.html */
 
   @Override
-  public void onMethodCall(MethodCall call, Result result) {
+  public void onMethodCall(@NonNull MethodCall call, @NonNull Result result) {
     switch(call.method){
     /*--direct call--*/
     case "starcore_nativeLibraryDir" :
     case "starcore_getDocumentPath" :
-    case "starcore_getResourcePath" :
+        case "starcore_getResourcePath" :
+        case "starcore_getAssetsPath" :
     case "starcore_getPackageName" :
     case "starcore_unzipFromAssets" :
     case "starcore_copyFileFromAssets" :
     case "starcore_loadLibrary" :
     case "starcore_isAndroid" :
+    case "starcore_getPlatform" :
+    case "starcore_setEnv" :
+    case "starcore_getEnv" :
 
     case "starcore_init" :
     case "starcore_sRPDispatch":
@@ -600,7 +651,11 @@ public class StarflutPlugin implements MethodCallHandler {
     case "starcore_getResourcePath" :{
       result.success("/data/data/"+activity.getPackageName()+"/files");
       }
-      break; 
+      break;
+    case "starcore_getAssetsPath" :{
+      result.success("/data/data/"+activity.getPackageName()+"/files");
+      }
+      break;
     case "starcore_getPackageName" :{
       result.success(activity.getPackageName());
       }
@@ -633,7 +688,7 @@ public class StarflutPlugin implements MethodCallHandler {
             DesPath = "/data/data/"+activity.getPackageName()+"/files";
             CreatePath(DesPath);
           }
-          copyFile(activity,(String)plist.get(0),SrcPath,DesPath);
+          copyFile(activity,(String)plist.get(0),SrcPath,DesPath,(boolean)plist.get(3));
           result.success(true);
         }
         catch(Exception e)
@@ -659,8 +714,20 @@ public class StarflutPlugin implements MethodCallHandler {
     case "starcore_isAndroid" :{
         result.success(true);
       }
-      break;                      
-    case "starcore_init" :{
+      break;
+        case "starcore_getPlatform" :{
+            result.success((int)0);
+        }
+        break;
+        case "starcore_setEnv" :{
+            result.success(false);
+        }
+        break;
+        case "starcore_getEnv" :{
+            result.success("");
+        }
+        break;
+        case "starcore_init" :{
         //----create new thread and init starcore----
         final Integer w_tag = get_WaitResultIndex();
         StarFlutWaitResult m_WaitResult = new_WaitResult(w_tag);
@@ -676,7 +743,7 @@ public class StarflutPlugin implements MethodCallHandler {
               public void handleMessage(Message msg) {
                 switch( msg.what ){
                 case starcore_ThreadTick_MessageID:
-                  if( starcore == null ){
+                  if( starcore == null || StarCoreInitFlag == false){
                     break; /*--starcore not init--*/
                   }
                   starcore._SRPLock();  
@@ -931,19 +998,23 @@ public class StarflutPlugin implements MethodCallHandler {
           }
     case "starcore_moduleExit" : /*starcore_moduleExit*/
           {
-            StarCoreInitFlag = false;
+            if( StarCoreInitFlag == false )
+                return true;
+            
             synchronized (mutexObject)
             {
                 ExitAppFlag = true;
-            }             
+            } 
+            CleObjectMap.clear(); 
+
             starcore._SRPLock();
-            starcore._ModuleExit();  
-            CleObjectMap.clear();          
+            starcore._ModuleExit();      
+
+            StarCoreInitFlag = false;
             return true;                         
           }  
     case "starcore_moduleClear" : /*starcore_moduleClear*/
           {
-            StarCoreInitFlag = false;
             starcore._SRPLock();
             starcore._ModuleClear();
             starcore._SRPUnLock();
@@ -958,7 +1029,9 @@ public class StarflutPlugin implements MethodCallHandler {
             }else{
               starcore._RegMsgCallBack_P(new StarMsgCallBackInterface(){    
                 public Object Invoke( int ServiceGroupID, final int uMes, Object wParam, Object lParam)
-                {        
+                {
+                    if( StarflutPlugin_IsDetached == true )
+                        return null; /*add 2020/11/20*/
                   final Integer w_tag = get_WaitResultIndex();
                   StarFlutWaitResult m_WaitResult = new_WaitResult(w_tag);
 
@@ -1084,9 +1157,14 @@ public class StarflutPlugin implements MethodCallHandler {
             starcore._ReleaseScriptGIL();
             starcore._SRPUnLock();
             return true;                   
-          }           
-          
-    /*-----------------------------------------------*/
+          }
+
+        case "starcore_setShareLibraryPath" : /*setShareLibraryPath*/
+        {
+            return null;
+        }
+
+        /*-----------------------------------------------*/
     case "StarSrvGroupClass_toString" : /*StarSrvGroupClass_toString*/
           {
             ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
@@ -2451,7 +2529,7 @@ public class StarflutPlugin implements MethodCallHandler {
             if( in_args == null ){
               starcore._SRPUnLock();
               return null;               
-            }                 
+            }
             Object Result = l_StarObject._Call((String)plist.get(1),in_args); 
             ArrayList<Object> out = processOutputArgs(new Object[]{Result});
             starcore._SRPUnLock();
@@ -2719,6 +2797,48 @@ public class StarflutPlugin implements MethodCallHandler {
             starcore._SRPUnLock();
             return Result;                 
           }
+
+        case "StarObjectClass_active" : /*StarObjectClass_active*/
+        {
+            ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
+            StarObjectClass l_StarObject = (StarObjectClass)CleObjectMap.get((String)plist.get(0));
+            if( l_StarObject == null ){
+                System.out.println(String.format("star object[%s] can not be found..",(String)plist.get(0)));
+                return false;
+            }
+            starcore._SRPLock();
+            boolean Result = l_StarObject._Active();
+            starcore._SRPUnLock();
+            return Result;
+        }
+
+        case "StarObjectClass_deActive" : /*StarObjectClass_deActive*/
+        {
+            ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
+            StarObjectClass l_StarObject = (StarObjectClass)CleObjectMap.get((String)plist.get(0));
+            if( l_StarObject == null ){
+                System.out.println(String.format("star object[%s] can not be found..",(String)plist.get(0)));
+                return null;
+            }
+            starcore._SRPLock();
+            l_StarObject._Deactive();
+            starcore._SRPUnLock();
+            return null;
+        }
+
+        case "StarObjectClass_isActive" : /*StarObjectClass_isActive*/
+        {
+            ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
+            StarObjectClass l_StarObject = (StarObjectClass)CleObjectMap.get((String)plist.get(0));
+            if( l_StarObject == null ){
+                System.out.println(String.format("star object[%s] can not be found..",(String)plist.get(0)));
+                return false;
+            }
+            starcore._SRPLock();
+            boolean Result = l_StarObject._IsActive();
+            starcore._SRPUnLock();
+            return Result;
+        }
 
     default:
           return null;

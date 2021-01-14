@@ -10,6 +10,7 @@ typedef Future<Object> StarObjectScriptProc(StarObjectClass cleObject,List paras
 typedef void DispatchRequestProc();
 
 /*flutter build ios --no-codesign */
+/*for more details about the interface, please refer to "common language extension_interface for script_en" */
 
 /*--------------------------------------------------------------------------
 note: 
@@ -20,13 +21,20 @@ note:
   !! starflut must be run in main ui thread.
 
 Starflut:
-  ** for android and ios
   isAndroid            : static Future<bool> isAndroid() async
   getFactory           : static Future<StarCoreFactory> getFactory() async
   getDocumentPath      : static Future<String> getDocumentPath() async
+                       : andoid : "/data/data/"+activity.getPackageName()+"/files"
+                       : ios/macos: NSDocumentDirectory
+                       : others: reserved
   getResourcePath      : static Future<String> getResourcePath() async
-                       : for ios : [[NSBundle mainBundle] resourcePath]
+                       : for ios/macos : [[NSBundle mainBundle] resourcePath]
                        : for android : is same with getDocumentPath
+                       : for windows : the executable file path
+                       : others : reserved
+  getAssetsPath         : static Future<String> getAssetsPath() async
+                       : for android : is same with getDocumentPath
+                       : for others : flutter assets path
 
   pushLocalFrame       : static void pushLocalFrame()
   popLocalFrame        : static void popLocalFrame()
@@ -35,6 +43,19 @@ Starflut:
 
                        : StarSrvGroupClass instance always in root frame
                        : StarServiceClass instance returned from getService or initSimple always in root frame
+
+  --v0.9.0
+  getPlatform          : static Future<int> getPlatform() async
+                         return value : starflut.ANDROID, IOS, WINDOWS, LINUX, MACOS, WEB
+
+  setEnv               : static Future<bool> setEnv(String Name,String Value) async
+                         note: android does not support this
+  getEnv               : static Future<String> getEnv(String Name) async
+                         note: android does not support this
+  loadLibrary          : static Future<bool> loadLibrary(String name) async
+                         load sharelibrary
+                         note: ios does not support this
+
 
   ** for android
   getNativeLibraryDir  : static Future<String> getNativeLibraryDir() async
@@ -46,10 +67,12 @@ Starflut:
                        : srcRelatePath is the path fromm assets, may be null, if at assets's root
                        : desRelatePath is the path relative to "/data/data/"+activity.getPackageName()+"/files"
                        :               if null, the desRelatePath is "/data/data/"+activity.getPackageName()+"/files"
-  loadLibrary          : static Future<bool> loadLibrary(String name) async
   getActivity          : static Future<StarObjectClass> getActivity() async
-                       : note: this function must be called after [await SrvGroup.initRaw("java",Service);]
+                       : note: this function must be called after the service is created
                          note: only valid for android
+
+  --v0.9.0
+  copyFileFromAssetsEx   : static Future<bool> copyFileFromAssetsEx(String name,String srcRelatePath,String desRelatePath,bool OverwriteIfExist) async
 
   ** for ios
   rubyInitExt          : static Future<String> rubyInitExt() async
@@ -88,6 +111,11 @@ StarCoreFactory:
   --v0.6.0
   releaseScriptGIL     : Future<void> releaseScriptGIL() async
   captureScriptGIL     : Future<void> captureScriptGIL() async
+
+  --v0.9.0
+  setShareLibraryPath  : Future<void> setShareLibraryPath(String path) async
+                       : note: macos, windows, linux
+                       : the location of script interface share library, such as : libstarpy.dylib/so...
 
 StarSrvGroupClass :
 
@@ -140,7 +168,7 @@ StarServiceClass:
   getObject            : Future<StarObjectClass> getObject (String objectName) async          
   getObjectEx          : Future<StarObjectClass> getObjectEx (String objectID) async  
   newObject            : Future<StarObjectClass> newObject (List args) async       
-                       : == New    
+                       : == "_New()"
   runScript            : Future<List> runScript (String scriptInterface,String scriptBuf,String moduleName,String workDirectory) async
   runScriptEx          : Future<List> runScriptEx (String scriptInterface,StarBinBufClass binBuf,String moduleName,String workDirectory) async
   doFile               : Future<List> doFile (String scriptInterface,String fileName,String workDirectory) async
@@ -214,6 +242,7 @@ StarObject :
   call                 : Future<Object> call (String funcName,List args) async
                        : note:  !!! In callback function, do not call any starflut functions
   newObject            : Future<StarObjectClass> newObject (List args) async
+                       : = "_New()"
   free                 : Future<void> free () async
   dispose              : Future<void> dispose () async
   hasRawContext        : Future<bool> hasRawContext () async
@@ -228,6 +257,12 @@ StarObject :
   instNumber           : Future<int> instNumber () async
   changeParent         : Future<void> changeParent (StarObjectClass parentObject,String queueName) async
   jsonCall             : Future<String> jsonCall (String jsonString) async
+
+  --v0.9.0
+  active               : Future<bool> active () async
+  deActive             : Future<void> deActive () async
+  isActive             : Future<bool> isActive () async
+
 
 ---------------------------------------------------------------------------*/
 
@@ -244,6 +279,13 @@ class StarObjectWeakReference{
 */
 
 class Starflut {
+  static const int ANDROID = 0;
+  static const int IOS = 1;
+  static const int WINDOWS = 2;
+  static const int LINUX = 3;
+  static const int MACOS = 4;
+  static const int WEB = 5;
+
   static StarCoreFactory starcore;
 
   /*--dart no destruct, so we use Expando the track the starcore object which will be collected by gc--*/
@@ -267,9 +309,9 @@ class Starflut {
   static const String StarParaPkgPrefix =  "@s_s_p";
   static const String StarBinBufPrefix  =  "@s_s_b";
   //static const String StarSXmlPrefix  =  "@s_s_x";
-  static const String StarObjectPrefix = "@s_s_o";  
+  static const String StarObjectPrefix = "@s_s_o";
   static const String StarValueBooleanPrefix_TRUE = "@s_s_t_bool_true";  /*-fix bug for return boolean in arraylist or hashmap-*/
-  static const String StarValueBooleanPrefix_FALSE = "@s_s_t_bool_false"; 
+  static const String StarValueBooleanPrefix_FALSE = "@s_s_t_bool_false";
 
   static List<List<StarObjectRecordClass>> starObjectRecordFrame = new List<List<StarObjectRecordClass>>();
   static List<StarObjectRecordClass> starObjectRecordListRoot;
@@ -278,7 +320,7 @@ class Starflut {
   static List<StarObjectRecordClass> starObjectRecordList;
 
   static const MethodChannel channel =
-      const MethodChannel('starflut');
+  const MethodChannel('starflut');
 
   static Future<StarCoreFactory> getFactory() async
   {
@@ -290,6 +332,8 @@ class Starflut {
 
       channel.setMethodCallHandler(handler);
       String starTag = await channel.invokeMethod('starcore_init');
+      if( starTag == null || starTag.length == 0 )
+          return null;
       starcore = new StarCoreFactory(starTag);
       return starcore;
     }else{
@@ -301,9 +345,9 @@ class Starflut {
     if( starcore == null ){
       throw 'pushLocalFrame failed. Starflut.getFactory must be called first!';
     }
-      List<StarObjectRecordClass> ll = new List<StarObjectRecordClass>();
-      starObjectRecordFrame.add(ll); // create frame
-      starObjectRecordList = ll;
+    List<StarObjectRecordClass> ll = new List<StarObjectRecordClass>();
+    starObjectRecordFrame.add(ll); // create frame
+    starObjectRecordList = ll;
   }
 
   static void popLocalFrame(){
@@ -312,15 +356,15 @@ class Starflut {
       return; /*--no action--*/
     }
     if( !identical(starObjectRecordList,starObjectRecordFrame[index-1]) ){
-        print("starflut object frame error...[critical]");
-        return;
-    }    
+      print("starflut object frame error...[critical]");
+      return;
+    }
     starObjectRecordFrame.removeAt(index-1);
     for(int i=0; i < starObjectRecordList.length; i++ ){
-        starObjectRecordFrameWaitFree.add(starObjectRecordList[i].starObject.starTag);
+      starObjectRecordFrameWaitFree.add(starObjectRecordList[i].starObject.starTag);
     }
     starObjectRecordList = starObjectRecordFrame[index-2];
-  }  
+  }
 
   static StarSrvGroupClass getStarSrvGroupFromRecordByTag(String tag)
   {
@@ -332,7 +376,7 @@ class Starflut {
     return null;
   }
 
-   static StarCoreBase getObjectFromRecordById(String id)
+  static StarCoreBase getObjectFromRecordById(String id)
   {
     for(int i=0; i < starObjectRecordListRoot.length; i++ ){
       if( starObjectRecordListRoot[i].starObject.starId == id ){
@@ -340,45 +384,75 @@ class Starflut {
       }
     }
     return null;
-  } 
+  }
+
+  static Future<List> typeCheck(List value) async
+  {
+    return await channel.invokeMethod('starcore_typeCheck',value);
+  }
 
   static Future<String> getNativeLibraryDir() async
   {
     return await channel.invokeMethod('starcore_nativeLibraryDir');
-  }   
+  }
 
   static Future<String> getDocumentPath() async
   {
     return await channel.invokeMethod('starcore_getDocumentPath');
-  }  
+  }
   static Future<String> getResourcePath() async
   {
     return await channel.invokeMethod('starcore_getResourcePath');
-  } 
+  }
+  static Future<String> getAssetsPath() async
+  {
+    return await channel.invokeMethod('starcore_getAssetsPath');
+  }
   static Future<String> rubyInitExt() async
   {
     return await channel.invokeMethod('starcore_rubyInitExt');
-  } 
+  }
   static Future<String> getPackageName() async
   {
     return await channel.invokeMethod('starcore_getPackageName');
-  }    
+  }
   static Future<bool> unzipFromAssets(String fileName,String desPath,bool overWriteFlag) async
   {
     return await channel.invokeMethod('starcore_unzipFromAssets',[fileName,desPath,overWriteFlag]);
-  }      
+  }
   static Future<bool> copyFileFromAssets(String name,String srcRelatePath,String desRelatePath) async
   {
-    return await channel.invokeMethod('starcore_copyFileFromAssets',[name,srcRelatePath,desRelatePath]);
-  }    
-  static Future<bool> loadLibrary(String name) async
+    return await channel.invokeMethod('starcore_copyFileFromAssets',[name,srcRelatePath,desRelatePath,true]);
+  }
+  static Future<bool> copyFileFromAssetsEx(String name,String srcRelatePath,String desRelatePath,bool OverwriteIfExist) async
   {
-    return await channel.invokeMethod('starcore_loadLibrary',[name]);
-  }      
+    return await channel.invokeMethod('starcore_copyFileFromAssets',[name,srcRelatePath,desRelatePath,OverwriteIfExist]);
+  }
+
   static Future<bool> isAndroid() async
   {
     return await channel.invokeMethod('starcore_isAndroid');
-  }   
+  }
+  static Future<int> getPlatform() async
+  {
+    return await channel.invokeMethod('starcore_getPlatform');
+  }
+
+  static Future<bool> loadLibrary(String name) async
+  {
+    return await channel.invokeMethod('starcore_loadLibrary',[name]);
+  }
+
+  static Future<bool> setEnv(String name,String value) async
+  {
+    return await channel.invokeMethod('starcore_setEnv',[name,value]);
+  }
+
+  static Future<String> getEnv(String name) async
+  {
+    return await channel.invokeMethod('starcore_getEnv',name);
+  }
+
   static Future<StarObjectClass> getActivity(StarServiceClass service) async
   {
     try{
@@ -394,14 +468,14 @@ class Starflut {
         }else{
           Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
         }
-        return lObject;            
-      }  
+        return lObject;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }           
-  }   
+    }
+  }
 
   /*--callback function from java--*/
   static Future<dynamic> handler(MethodCall call) async{
@@ -419,7 +493,7 @@ class Starflut {
             return [lL[4],null];
           }
         }
-        break;    
+        break;
       case "starobjectclass_scriptproc":
         {
           List lL =  call.arguments;
@@ -428,7 +502,7 @@ class Starflut {
 
           List<String> tags = lL[0].split("+");
 
-          StarObjectClass lObject = getObjectFromRecordById(tags[1]); 
+          StarObjectClass lObject = getObjectFromRecordById(tags[1]);
           if( lObject == null ){
             lObject = new StarObjectClass(tags[0],tags[1]);
             Starflut.starObjectRecordList.add(new StarObjectRecordClass(lObject,"StarObjectClass",2));
@@ -436,10 +510,10 @@ class Starflut {
             Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
           }
           String funcName = lL[1];
-          List args = processOutputArgs(lL[2]);       
+          List args = processOutputArgs(lL[2]);
           if( !lObject.scriptCallBack.containsKey(funcName) ){
-             Starflut.popLocalFrame();
-            return [lL[3],funcName,null]; 
+            Starflut.popLocalFrame();
+            return [lL[3],funcName,null];
           }
           Object result;
           try{
@@ -452,7 +526,7 @@ class Starflut {
 
           return [lL[3],funcName,result];
         }
-        break;          
+        break;
     }
     return null;
   }
@@ -490,7 +564,7 @@ class Starflut {
         out[i] = vo.starTag;
       }else if( value is StarServiceClass ){
         StarServiceClass vo = value;
-        out[i] = vo.starTag;        
+        out[i] = vo.starTag;
       }else{
         out[i] = value;
       }
@@ -498,7 +572,7 @@ class Starflut {
     return out;
   }
 
-static Object processOutputArgs(Object argsListOrMap)
+  static Object processOutputArgs(Object argsListOrMap)
   {
     List args;
     bool isMap = false;
@@ -529,15 +603,15 @@ static Object processOutputArgs(Object argsListOrMap)
           }else{
             Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
           }
-          out[i] = lStarObject;                         
+          out[i] = lStarObject;
         }else if( val.startsWith(Starflut.StarBinBufPrefix)){
           StarBinBufClass lStarBinBuf = new StarBinBufClass(val);
           Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarBinBuf,"StarBinBufClass",2));
-          out[i] = lStarBinBuf;  
+          out[i] = lStarBinBuf;
         }else if( val.startsWith(Starflut.StarParaPkgPrefix)){
           StarParaPkgClass lStarParaPkg = new StarParaPkgClass(val);
           Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarParaPkg,"StarParaPkgClass",2));
-          out[i] = lStarParaPkg;       
+          out[i] = lStarParaPkg;
         }else if( val.startsWith(Starflut.StarServicePrefix)){
           List<String> tags = val.split("+");
           StarServiceClass lStarService = getObjectFromRecordById(tags[1]);
@@ -547,11 +621,11 @@ static Object processOutputArgs(Object argsListOrMap)
           }else{
             Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
           }
-          out[i] = lStarService;   
-        }else if( val.startsWith(Starflut.StarValueBooleanPrefix_TRUE)){               
-          out[i] = true;  
-        }else if( val.startsWith(Starflut.StarValueBooleanPrefix_FALSE)){               
-          out[i] = false;  
+          out[i] = lStarService;
+        }else if( val.startsWith(Starflut.StarValueBooleanPrefix_TRUE)){
+          out[i] = true;
+        }else if( val.startsWith(Starflut.StarValueBooleanPrefix_FALSE)){
+          out[i] = false;
         }else{
           out[i] = val;
         }
@@ -564,19 +638,19 @@ static Object processOutputArgs(Object argsListOrMap)
       }
     }
     if( isMap == false )
-        return out;
+      return out;
     Map mo = new Map();
     for( int ii=0; ii < (out.length/2); ii++ ){
       mo[out[2*ii]] = out[2*ii+1];
     }
     return mo;
-  }  
+  }
 
   /*--constant begin--*/
   static const int VSINIT_OK = 0;
   static const int VSINIT_HAS = 1;
   static const int VSINIT_ERROR = -1;
-  
+
   static const int SYNC_NOT = 0;
   static const int SYNC = 1;
   static const int SYNC_IN = 2;
@@ -595,151 +669,151 @@ static Object processOutputArgs(Object argsListOrMap)
   static const int SAVE_SAVE = 0;
   static const int SAVE_LOCAL = 1;
   static const int SAVE_GLOBAL = 2;
-  static const int SAVE_NONE = 3;  
+  static const int SAVE_NONE = 3;
 
   static const int ACTIVE_ALONE = 0;
   static const int ACTIVE_FOLLOW = 1;
   static const int ACTIVE_ACTIVE = 2;
-  static const int ACTIVE_DEACTIVE = 3;    
+  static const int ACTIVE_DEACTIVE = 3;
 
   static const int RCALL_OK = 0;
   static const int RCALL_COMMERROR = -1;
   static const int RCALL_OBJNOTEXIST = -2;
-  static const int RCALL_FUNCNOTEXIST = -3; 
+  static const int RCALL_FUNCNOTEXIST = -3;
   static const int RCALL_PARAERROR = -4;
   static const int RCALL_SYSERROR = -5;
   static const int RCALL_INVALIDUSR = -6;
-  static const int RCALL_OVERTIME = -7;     
-  static const int RCALL_UNKNOWN = -8;      
+  static const int RCALL_OVERTIME = -7;
+  static const int RCALL_UNKNOWN = -8;
 
   static const int RCALLSRC_C = 0;
   static const int RCALLSRC_SCRIPT = 1;
-  static const int RCALLSRC_WEBSERVICE = 2;  
+  static const int RCALLSRC_WEBSERVICE = 2;
 
-  static const int TYPE_BOOL = 1;  
-  static const int TYPE_INT8 = 2;  
-  static const int TYPE_UINT8 = 3;  
-  static const int TYPE_INT16 = 4;  
-    
-  static const int TYPE_UINT16 = 5;  
-  static const int TYPE_INT32 = 6;  
-  static const int TYPE_UINT32 = 7;  
-  static const int TYPE_INT64 = 60;      
+  static const int TYPE_BOOL = 1;
+  static const int TYPE_INT8 = 2;
+  static const int TYPE_UINT8 = 3;
+  static const int TYPE_INT16 = 4;
 
-  static const int TYPE_FLOAT = 8;  
-  static const int TYPE_DOUBLE = 58;  
-  static const int TYPE_LONG = 9;  
-  static const int TYPE_ULONG = 10;        
+  static const int TYPE_UINT16 = 5;
+  static const int TYPE_INT32 = 6;
+  static const int TYPE_UINT32 = 7;
+  static const int TYPE_INT64 = 60;
 
-  static const int TYPE_LONGHEX = 11;  
-  static const int TYPE_ULONGHEX = 12;  
-  static const int TYPE_VSTRING = 51;  
-  static const int TYPE_PTR = 14;         
+  static const int TYPE_FLOAT = 8;
+  static const int TYPE_DOUBLE = 58;
+  static const int TYPE_LONG = 9;
+  static const int TYPE_ULONG = 10;
 
-  static const int TYPE_MEMORY = 15;  
-  static const int TYPE_STRUCT = 16;  
-  static const int TYPE_COLOR = 19;  
-  static const int TYPE_RECT = 20;       
+  static const int TYPE_LONGHEX = 11;
+  static const int TYPE_ULONGHEX = 12;
+  static const int TYPE_VSTRING = 51;
+  static const int TYPE_PTR = 14;
 
-  static const int TYPE_FONT = 21;  
-  static const int TYPE_TIME = 49;  
-  static const int TYPE_CHAR = 13;  
-  static const int TYPE_UUID = 41;      
+  static const int TYPE_MEMORY = 15;
+  static const int TYPE_STRUCT = 16;
+  static const int TYPE_COLOR = 19;
+  static const int TYPE_RECT = 20;
 
-  static const int TYPE_STATICID = 29;  
-  static const int TYPE_CHARPTR = 30;  
-  static const int TYPE_PARAPKGPTR = 40;  
-  static const int TYPE_BINBUFPTR = 59;  
+  static const int TYPE_FONT = 21;
+  static const int TYPE_TIME = 49;
+  static const int TYPE_CHAR = 13;
+  static const int TYPE_UUID = 41;
 
-  static const int TYPE_INT8PTR = 55;  
-  static const int TYPE_UINT8PTR = 54;  
-  static const int TYPE_INT16PTR = 31;  
-  static const int TYPE_UINT16PTR = 52;  
+  static const int TYPE_STATICID = 29;
+  static const int TYPE_CHARPTR = 30;
+  static const int TYPE_PARAPKGPTR = 40;
+  static const int TYPE_BINBUFPTR = 59;
 
-  static const int TYPE_INT32PTR = 32;  
-  static const int TYPE_UINT32PTR = 53;  
-  static const int TYPE_INT64PTR = 62;  
-  static const int TYPE_FLOATPTR = 33;    
+  static const int TYPE_INT8PTR = 55;
+  static const int TYPE_UINT8PTR = 54;
+  static const int TYPE_INT16PTR = 31;
+  static const int TYPE_UINT16PTR = 52;
 
-  static const int TYPE_DOUBLEPTR = 63;  
-  static const int TYPE_ULONGPTR = 48;  
-  static const int TYPE_LONGPTR = 34;  
-  static const int TYPE_STRUCTPTR = 35;      
+  static const int TYPE_INT32PTR = 32;
+  static const int TYPE_UINT32PTR = 53;
+  static const int TYPE_INT64PTR = 62;
+  static const int TYPE_FLOATPTR = 33;
 
-  static const int TYPE_COLORPTR = 37;  
-  static const int TYPE_RECTPTR = 38;  
-  static const int TYPE_FONTPTR = 39;  
-  static const int TYPE_TIMEPTR = 50;      
+  static const int TYPE_DOUBLEPTR = 63;
+  static const int TYPE_ULONGPTR = 48;
+  static const int TYPE_LONGPTR = 34;
+  static const int TYPE_STRUCTPTR = 35;
 
-  static const int TYPE_UUIDPTR = 47;  
-  static const int TYPE_VOID = 254;  
-  static const int TYPE_OBJPTR = 57;  
-  static const int TYPE_TABLE = 56;    
+  static const int TYPE_COLORPTR = 37;
+  static const int TYPE_RECTPTR = 38;
+  static const int TYPE_FONTPTR = 39;
+  static const int TYPE_TIMEPTR = 50;
 
-  static const int TYPE_UWORD = 61;  
-  static const int TYPE_UWORDPTR = 64;    
-    
-  static const String INVALID_UUID = "00000000-0000-0000-0000-000000000000";    
-    	
-  static const int MSG_VSDISPMSG = 0x00000001;  
-  static const int MSG_VSDISPLUAMSG = 0x00000002;  
-  static const int MSG_DISPMSG = 0x00000003;  
-  static const int MSG_DISPLUAMSG = 0x00000004;    
+  static const int TYPE_UUIDPTR = 47;
+  static const int TYPE_VOID = 254;
+  static const int TYPE_OBJPTR = 57;
+  static const int TYPE_TABLE = 56;
 
-  static const int MSG_MESSAGEBOX = 0x00000005;      
-  static const int MSG_EXIT = 0x00000006;      
-  static const int MSG_GETWNDHANDLE = 0x00000007;      
-  static const int MSG_SETWNDSIZE = 0x00000008;      
+  static const int TYPE_UWORD = 61;
+  static const int TYPE_UWORDPTR = 64;
 
-  static const int MSG_GETWNDSIZE = 0x00000009;      
-  static const int MSG_CLEARWND = 0x0000000A;      
-  static const int MSG_HIDEWND = 0x0000000B;      
-  static const int MSG_SHOWWND = 0x0000000C;    
+  static const String INVALID_UUID = "00000000-0000-0000-0000-000000000000";
 
-  static const int MSG_SETWNDBK = 0x0000000D;      
-  static const int MSG_SETFOCUS = 0x0000000E;      
-  static const int MSG_ISAPPACTIVE = 0x0000000F;      
-  static const int MSG_SETIDLEACTIVE = 0x00000010;    
+  static const int MSG_VSDISPMSG = 0x00000001;
+  static const int MSG_VSDISPLUAMSG = 0x00000002;
+  static const int MSG_DISPMSG = 0x00000003;
+  static const int MSG_DISPLUAMSG = 0x00000004;
 
-  static const int MSG_SETINFOCOLOR = 0x00000011;      
-  static const int MSG_SETINFOBK = 0x00000012;      
-  static const int MSG_KILLFOCUS = 0x00000013;      
-  static const int MSG_ONBEFORESTOPSERVICE = 0x000000020; 
+  static const int MSG_MESSAGEBOX = 0x00000005;
+  static const int MSG_EXIT = 0x00000006;
+  static const int MSG_GETWNDHANDLE = 0x00000007;
+  static const int MSG_SETWNDSIZE = 0x00000008;
 
-  static const int MSG_ONSTOPSERVICE = 0x000000021;      
-  static const int MSG_ONACTIVESERVICE = 0x00000022;      
-  static const int MSG_SAVESERVICE = 0x000000023;      
-  static const int MSG_SETMSGHOOK = 0x00000024; 
+  static const int MSG_GETWNDSIZE = 0x00000009;
+  static const int MSG_CLEARWND = 0x0000000A;
+  static const int MSG_HIDEWND = 0x0000000B;
+  static const int MSG_SHOWWND = 0x0000000C;
 
-  static const int MSG_GETMSGHOOK = 0x00000025;      
-  static const int MSG_HYPERLINK = 0x00000026;      
-  static const int MSG_SERVERTERM = 0x00000027;      
-  static const int MSG_APPEVENT = 0x00000028; 
+  static const int MSG_SETWNDBK = 0x0000000D;
+  static const int MSG_SETFOCUS = 0x0000000E;
+  static const int MSG_ISAPPACTIVE = 0x0000000F;
+  static const int MSG_SETIDLEACTIVE = 0x00000010;
 
-  static const int MSG_ISMANAGERVISIBLE = 0x00000030;      
-  static const int MSG_HIDEMANAGER = 0x00000031;      
-  static const int MSG_SHOWMANAGER = 0x00000032;      
-  static const int MSG_SETMANAGERCAPTION = 0x00000033; 
+  static const int MSG_SETINFOCOLOR = 0x00000011;
+  static const int MSG_SETINFOBK = 0x00000012;
+  static const int MSG_KILLFOCUS = 0x00000013;
+  static const int MSG_ONBEFORESTOPSERVICE = 0x000000020;
 
-  static const int MSG_GETMANAGERSIZE = 0x00000034;      
-  static const int MSG_GETMANAGERHANDLE = 0x00000035;      
-  static const int MSG_SHOWMANAGERSTATUSMENU = 0x00000036;      
+  static const int MSG_ONSTOPSERVICE = 0x000000021;
+  static const int MSG_ONACTIVESERVICE = 0x00000022;
+  static const int MSG_SAVESERVICE = 0x000000023;
+  static const int MSG_SETMSGHOOK = 0x00000024;
+
+  static const int MSG_GETMSGHOOK = 0x00000025;
+  static const int MSG_HYPERLINK = 0x00000026;
+  static const int MSG_SERVERTERM = 0x00000027;
+  static const int MSG_APPEVENT = 0x00000028;
+
+  static const int MSG_ISMANAGERVISIBLE = 0x00000030;
+  static const int MSG_HIDEMANAGER = 0x00000031;
+  static const int MSG_SHOWMANAGER = 0x00000032;
+  static const int MSG_SETMANAGERCAPTION = 0x00000033;
+
+  static const int MSG_GETMANAGERSIZE = 0x00000034;
+  static const int MSG_GETMANAGERHANDLE = 0x00000035;
+  static const int MSG_SHOWMANAGERSTATUSMENU = 0x00000036;
   static const int MSG_SETMANAGERSTYLE = 0x00000037;
 
-  static const int MSG_MOVEMANAGER = 0x00000038;      
-  static const int MSG_GETMANAGERPOS = 0x00000039;      
-  static const int MSG_SETMANAGERSTATUS = 0x0000003A;      
+  static const int MSG_MOVEMANAGER = 0x00000038;
+  static const int MSG_GETMANAGERPOS = 0x00000039;
+  static const int MSG_SETMANAGERSTATUS = 0x0000003A;
   static const int MSG_REDIRECTTOURLREQUEST = 0x00000040;
 
-  static const int MSG_REDIRECTTOURLINFO = 0x00000041;      
-  static const int MSG_GETURLREQUEST = 0x00000050;      
-  static const int MSG_SETPROGRAMTYPE = 0x00000060;      
-  static const int MSG_ISWINDOWLESSSITE = 0x00000070;  
+  static const int MSG_REDIRECTTOURLINFO = 0x00000041;
+  static const int MSG_GETURLREQUEST = 0x00000050;
+  static const int MSG_SETPROGRAMTYPE = 0x00000060;
+  static const int MSG_ISWINDOWLESSSITE = 0x00000070;
 
-  static const int MSG_ONTELNETSTRING = 0x0000007A;      
-  static const int MSG_ONTELNETSTRING_PREEXECUTE = 0x0000007B;  
+  static const int MSG_ONTELNETSTRING = 0x0000007A;
+  static const int MSG_ONTELNETSTRING_PREEXECUTE = 0x0000007B;
 
-  /*--constant end--*/
+/*--constant end--*/
 }
 
 
@@ -782,7 +856,7 @@ class StarCoreBase{
         Starflut.starObjectRecordListRoot.removeAt(i);
         return;
       }
-    }    
+    }
     return;
   }
 
@@ -798,7 +872,7 @@ class StarObjectRecordClass{
   DateTime lastAccessTag;
   String typeString;
 
-  /*--from https://github.com/dart-lang/logging/issues/32--*/ 
+  /*--from https://github.com/dart-lang/logging/issues/32--*/
   /*
   Frame _findCallerFrame(Trace trace) {
     bool foundLogging = false;
@@ -836,10 +910,10 @@ class StarObjectRecordClass{
         codeLocation = '$filename$line';
       }
     }
-*/    
+*/
     //print("new starobject[$typeString] : $codeLocation");
   }
-  
+
 }
 
 /*------StarCoreFactory---*/
@@ -849,7 +923,7 @@ class StarCoreFactory extends StarCoreBase{
   {
     this.starTag = starTag;
   }
-  
+
   @override
   bool isEqual(StarCoreBase des)
   {
@@ -861,11 +935,11 @@ class StarCoreFactory extends StarCoreBase{
   Future<int> initCore(bool serverFlag,bool showMenuFlag,bool showClientWndFlag,bool sRPPrintFlag,String debugInterface,int debugPort,String clientInterface,int clientPort) async
   {
     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }
-        return await Starflut.channel.invokeMethod('starcore_InitCore',[serverFlag,showMenuFlag,showClientWndFlag,sRPPrintFlag,debugInterface,debugPort,clientInterface,clientPort]);
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('starcore_InitCore',[serverFlag,showMenuFlag,showClientWndFlag,sRPPrintFlag,debugInterface,debugPort,clientInterface,clientPort]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
@@ -876,134 +950,134 @@ class StarCoreFactory extends StarCoreBase{
   Future<StarSrvGroupClass> initSimpleEx(int clientPort,int webPort,List<String> dependService) async
   {
     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }      
-        List paralist = [clientPort,webPort];
-        paralist.addAll(dependService);
-        String starTag = await Starflut.channel.invokeMethod('starcore_InitSimpleEx',paralist);          
-        if( starTag == null )
-            return null;
-        else{
-          StarSrvGroupClass lSrvGroup = Starflut.getStarSrvGroupFromRecordByTag(starTag);
-          if( lSrvGroup == null ){
-            lSrvGroup = new StarSrvGroupClass(starTag);
-            Starflut.starObjectRecordListRoot.add(new StarObjectRecordClass(lSrvGroup,"StarSrvGroupClass",2)); //---to root frame
-          }
-          return lSrvGroup;          
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      List paralist = [clientPort,webPort];
+      paralist.addAll(dependService);
+      String starTag = await Starflut.channel.invokeMethod('starcore_InitSimpleEx',paralist);
+      if( starTag == null )
+        return null;
+      else{
+        StarSrvGroupClass lSrvGroup = Starflut.getStarSrvGroupFromRecordByTag(starTag);
+        if( lSrvGroup == null ){
+          lSrvGroup = new StarSrvGroupClass(starTag);
+          Starflut.starObjectRecordListRoot.add(new StarObjectRecordClass(lSrvGroup,"StarSrvGroupClass",2)); //---to root frame
         }
+        return lSrvGroup;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
     }
-  }  
+  }
 
   Future<StarServiceClass> initSimple(String serviceName,String servicePass,int clientPortNumber,int webPortNumber,List<String> dependService) async
   {
     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }      
-        List paralist = [serviceName,servicePass,clientPortNumber,webPortNumber];
-        paralist.addAll(dependService);
-        String starTag = await Starflut.channel.invokeMethod('starcore_InitSimple',paralist);          
-        if( starTag == null )
-            return null;
-        else{
-          List<String> tags = starTag.split("+");
-          StarServiceClass lService = Starflut.getObjectFromRecordById(tags[1]);
-          if( lService == null ){           
-            lService = new StarServiceClass(tags[0],tags[1]);
-            Starflut.starObjectRecordListRoot.add(new StarObjectRecordClass(lService,"StarServiceClass",2));  //add to root
-          }else{
-            Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
-          }
-          return lService;          
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      List paralist = [serviceName,servicePass,clientPortNumber,webPortNumber];
+      paralist.addAll(dependService);
+      String starTag = await Starflut.channel.invokeMethod('starcore_InitSimple',paralist);
+      if( starTag == null )
+        return null;
+      else{
+        List<String> tags = starTag.split("+");
+        StarServiceClass lService = Starflut.getObjectFromRecordById(tags[1]);
+        if( lService == null ){
+          lService = new StarServiceClass(tags[0],tags[1]);
+          Starflut.starObjectRecordListRoot.add(new StarObjectRecordClass(lService,"StarServiceClass",2));  //add to root
+        }else{
+          Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
         }
+        return lService;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
     }
-  }    
+  }
 
   Future<StarSrvGroupClass> getSrvGroup(Object serviceNameWithGroupID) async
   {
     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }      
-        String starTag = await Starflut.channel.invokeMethod('starcore_GetSrvGroup',serviceNameWithGroupID);          
-        if( starTag == null )
-            return null;
-        else{
-          StarSrvGroupClass lSrvGroup = Starflut.getStarSrvGroupFromRecordByTag(starTag);
-          if( lSrvGroup == null ){
-            lSrvGroup = new StarSrvGroupClass(starTag);
-            Starflut.starObjectRecordListRoot.add(new StarObjectRecordClass(lSrvGroup,"StarSrvGroupClass",2));  //---to root frame
-          }
-          return lSrvGroup;        
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      String starTag = await Starflut.channel.invokeMethod('starcore_GetSrvGroup',serviceNameWithGroupID);
+      if( starTag == null )
+        return null;
+      else{
+        StarSrvGroupClass lSrvGroup = Starflut.getStarSrvGroupFromRecordByTag(starTag);
+        if( lSrvGroup == null ){
+          lSrvGroup = new StarSrvGroupClass(starTag);
+          Starflut.starObjectRecordListRoot.add(new StarObjectRecordClass(lSrvGroup,"StarSrvGroupClass",2));  //---to root frame
         }
+        return lSrvGroup;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }    
+    }
   }
 
   Future<void> moduleExit() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('starcore_moduleExit');          
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('starcore_moduleExit');
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }    
+    }
   }
 
   Future<void> moduleClear() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('starcore_moduleClear');          
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('starcore_moduleClear');
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }    
-  }  
+    }
+  }
 
   Future<void> regMsgCallBackP(MsgCallBackProc callBack) async
   {
     try {
       if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
         await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-      }      
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
       if( callBack == null){
         if( gMsgCallBack != null )
-          await Starflut.channel.invokeMethod('starcore_regMsgCallBackP',false); 
-        gMsgCallBack = null;                 
+          await Starflut.channel.invokeMethod('starcore_regMsgCallBackP',false);
+        gMsgCallBack = null;
       }else{
         if( gMsgCallBack == null )
           await Starflut.channel.invokeMethod('starcore_regMsgCallBackP',true);
-        gMsgCallBack = callBack;        
+        gMsgCallBack = callBack;
       }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }    
-  }    
+    }
+  }
   MsgCallBackProc gMsgCallBack;
 
   Future<List> flutterMsgCallBack(int serviceGroupID, int uMsg,Object wParam,Object lParam) async
@@ -1015,7 +1089,7 @@ class StarCoreFactory extends StarCoreBase{
       on Exception{
       }
     }else{
-    }      
+    }
     return null;
   }
 
@@ -1056,221 +1130,237 @@ class StarCoreFactory extends StarCoreBase{
   /*--sRPDispatch--*/
   Future<bool> sRPDispatch(bool waitFalg) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('starcore_sRPDispatch',waitFalg);          
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('starcore_sRPDispatch',waitFalg);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }    
-  }  
+    }
+  }
 
   /*--sRPLock--*/
   Future<void> sRPLock() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('starcore_sRPLock');          
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('starcore_sRPLock');
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }    
-  }  
+    }
+  }
 
   /*--sRPUnLock--*/
   Future<void> sRPUnLock() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('starcore_sRPUnLock');          
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('starcore_sRPUnLock');
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }    
-  }      
+    }
+  }
 
   /*--setRegisterCode--*/
   Future<bool> setRegisterCode(String codeString,bool single) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('starcore_setRegisterCode',[codeString,single]);          
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('starcore_setRegisterCode',[codeString,single]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }    
-  }   
+    }
+  }
 
   /*--isRegistered--*/
   Future<bool> isRegistered () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('starcore_isRegistered');          
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('starcore_isRegistered');
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }    
-  }   
+    }
+  }
 
   /*--setLocale--*/
   Future<void> setLocale(String lang) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('starcore_setLocale',lang);          
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('starcore_setLocale',lang);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }    
-  }   
+    }
+  }
 
   /*--getLocale--*/
   Future<String> getLocale () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('starcore_getLocale');          
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('starcore_getLocale');
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return "";
-    }    
-  }    
+    }
+  }
 
   /*--version--*/
   Future<List> version () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object result = await Starflut.channel.invokeMethod('starcore_version');       
-        return Starflut.processOutputArgs(result);   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object result = await Starflut.channel.invokeMethod('starcore_version');
+      return Starflut.processOutputArgs(result);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return [0,0,0];
-    }    
-  }     
+    }
+  }
 
   /*--getScriptIndex--*/
   Future<int> getScriptIndex (String interface) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('starcore_getScriptIndex',interface);          
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('starcore_getScriptIndex',interface);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return 0;
-    }    
-  }     
+    }
+  }
 
   /*--starcore_setScript--*/
   Future<bool> setScript(String scriptInterface,String module, String para) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('starcore_setScript',[scriptInterface,module, para]);          
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('starcore_setScript',[scriptInterface,module, para]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }    
-  }    
+    }
+  }
 
   /*--detachCurrentThread--*/
   Future<void> detachCurrentThread() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('starcore_detachCurrentThread');          
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('starcore_detachCurrentThread');
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }    
-  }      
+    }
+  }
 
   /*--coreHandle--*/
   Future<int> coreHandle () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('starcore_coreHandle');          
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('starcore_coreHandle');
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return 0;
-    }    
-  }      
+    }
+  }
 
   /*--captureScriptGIL--*/
   Future<void> captureScriptGIL() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('starcore_captureScriptGIL');          
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('starcore_captureScriptGIL');
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }    
-  }   
+    }
+  }
 
   /*--releaseScriptGIL--*/
   Future<void> releaseScriptGIL() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('starcore_releaseScriptGIL');          
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('starcore_releaseScriptGIL');
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }    
-  }    
+    }
+  }
+
+  /*--setShareLibraryPath--*/
+  Future<void> setShareLibraryPath(String path) async
+  {
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('starcore_setShareLibraryPath',path);
+    }
+    on PlatformException catch (e){
+      print( "{$e.message}");
+      return;
+    }
+  }
 
 }
 
@@ -1292,137 +1382,137 @@ class StarSrvGroupClass extends StarCoreBase {
 
   Future<String> getString() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        String result = await Starflut.channel.invokeMethod('StarSrvGroupClass_toString',[this.starTag]);   
-        return result;                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      String result = await Starflut.channel.invokeMethod('StarSrvGroupClass_toString',[this.starTag]);
+      return result;
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return "Instance of 'StarSrvGroupClass'";
-    } 
+    }
   }
 
   /*--StarSrvGroupClass_createService--*/
   Future<StarServiceClass> createService(String servicePath,String serviceName,String rootPass,int frameInterval,int netPkgSize,int uploadPkgSize,int downloadPkgSize,int dataUpPkgSize,int dataDownPkgSize,String derviceID) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        String starTag = await Starflut.channel.invokeMethod('StarSrvGroupClass_createService',[this.starTag,servicePath,serviceName,rootPass,frameInterval,netPkgSize,uploadPkgSize,downloadPkgSize,dataUpPkgSize,dataDownPkgSize,derviceID]);          
-        if( starTag == null )
-            return null;
-        else{
-          List<String> tags = starTag.split("+");
-          StarServiceClass lService = Starflut.getObjectFromRecordById(tags[1]);
-          if( lService == null ){            
-            lService = new StarServiceClass(tags[0],tags[1]);
-            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lService,"StarServiceClass",2));
-          }else{
-            Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
-          }
-          return lService;          
-        }           
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      String starTag = await Starflut.channel.invokeMethod('StarSrvGroupClass_createService',[this.starTag,servicePath,serviceName,rootPass,frameInterval,netPkgSize,uploadPkgSize,downloadPkgSize,dataUpPkgSize,dataDownPkgSize,derviceID]);
+      if( starTag == null )
+        return null;
+      else{
+        List<String> tags = starTag.split("+");
+        StarServiceClass lService = Starflut.getObjectFromRecordById(tags[1]);
+        if( lService == null ){
+          lService = new StarServiceClass(tags[0],tags[1]);
+          Starflut.starObjectRecordList.add(new StarObjectRecordClass(lService,"StarServiceClass",2));
+        }else{
+          Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
+        }
+        return lService;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
-  }     
+    }
+  }
   /*--StarSrvGroupClass_getService--*/
   Future<StarServiceClass> getService(String username, String userpassword) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        String lTag = await Starflut.channel.invokeMethod('StarSrvGroupClass_getService',[this.starTag,username,userpassword]);          
-        if( lTag == null )
-            return null;
-        else{
-          List<String> tags = starTag.split("+");
-          StarServiceClass lService = Starflut.getObjectFromRecordById(tags[1]);
-          if( lService == null ){              
-            lService = new StarServiceClass(tags[0],tags[1]);
-            Starflut.starObjectRecordListRoot.add(new StarObjectRecordClass(lService,"StarServiceClass",2));  //add rooot
-          }else{
-            Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
-          }
-          return lService;          
-        }           
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      String starTag = await Starflut.channel.invokeMethod('StarSrvGroupClass_getService',[this.starTag,username,userpassword]);
+      if( starTag == null )
+        return null;
+      else{
+        List<String> tags = starTag.split("+");
+        StarServiceClass lService = Starflut.getObjectFromRecordById(tags[1]);
+        if( lService == null ){
+          lService = new StarServiceClass(tags[0],tags[1]);
+          Starflut.starObjectRecordListRoot.add(new StarObjectRecordClass(lService,"StarServiceClass",2));  //add rooot
+        }else{
+          Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
+        }
+        return lService;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
-  }     
+    }
+  }
 
   /*--StarSrvGroupClass_clearService--*/
   Future<void> clearService() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarSrvGroupClass_clearService',[this.starTag]);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarSrvGroupClass_clearService',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
-  }     
+    }
+  }
 
   /*--StarSrvGroupClass_newParaPkg--*/
   Future<StarParaPkgClass> newParaPkg(Object args) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        String starTag = await Starflut.channel.invokeMethod('StarSrvGroupClass_newParaPkg',[this.starTag,args]);          
-        if( starTag == null )
-            return null;
-        else{
-          StarParaPkgClass lParaPkg = new StarParaPkgClass(starTag);
-          Starflut.starObjectRecordList.add(new StarObjectRecordClass(lParaPkg,"StarParaPkgClass",2));
-          return lParaPkg;          
-        }           
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      String starTag = await Starflut.channel.invokeMethod('StarSrvGroupClass_newParaPkg',[this.starTag,args]);
+      if( starTag == null )
+        return null;
+      else{
+        StarParaPkgClass lParaPkg = new StarParaPkgClass(starTag);
+        Starflut.starObjectRecordList.add(new StarObjectRecordClass(lParaPkg,"StarParaPkgClass",2));
+        return lParaPkg;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
-  }    
+    }
+  }
 
   /*--StarSrvGroupClass_newBinBuf--*/
   Future<StarBinBufClass> newBinBuf() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        String starTag = await Starflut.channel.invokeMethod('StarSrvGroupClass_newBinBuf',[this.starTag]);          
-        if( starTag == null )
-            return null;
-        else{
-          StarBinBufClass lBinBuf = new StarBinBufClass(starTag);
-          Starflut.starObjectRecordList.add(new StarObjectRecordClass(lBinBuf,"StarBinBufClass",2));
-          return lBinBuf;          
-        }           
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      String starTag = await Starflut.channel.invokeMethod('StarSrvGroupClass_newBinBuf',[this.starTag]);
+      if( starTag == null )
+        return null;
+      else{
+        StarBinBufClass lBinBuf = new StarBinBufClass(starTag);
+        Starflut.starObjectRecordList.add(new StarObjectRecordClass(lBinBuf,"StarBinBufClass",2));
+        return lBinBuf;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
-  }    
+    }
+  }
 
   /*--StarSrvGroupClass_newSXml--*/
   /*
@@ -1447,7 +1537,7 @@ class StarSrvGroupClass extends StarCoreBase {
       return null;
     }      
   }     
-  */ 
+  */
 
   /*--StarSrvGroupClass_isObject--*/
   bool isObject(Object which)
@@ -1457,7 +1547,7 @@ class StarSrvGroupClass extends StarCoreBase {
     if(which is StarObjectClass)
       return true;
     return false;
-  }     
+  }
   bool isParaPkg(Object which)
   {
     if( which == null)
@@ -1465,7 +1555,7 @@ class StarSrvGroupClass extends StarCoreBase {
     if(which is StarParaPkgClass)
       return true;
     return false;
-  }     
+  }
   bool isBinBuf(Object which)
   {
     if( which == null)
@@ -1473,7 +1563,7 @@ class StarSrvGroupClass extends StarCoreBase {
     if(which is StarBinBufClass)
       return true;
     return false;
-  }    
+  }
   /* 
   bool isSXml(Object which)
   {
@@ -1483,387 +1573,387 @@ class StarSrvGroupClass extends StarCoreBase {
       return true;
     return false;
   }  
-  */         
+  */
   /*--StarSrvGroupClass_getServicePath--*/
   Future<String> getServicePath() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_getServicePath',[this.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_getServicePath',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
-  }  
+    }
+  }
   /*--StarSrvGroupClass_setServicePath--*/
   Future<void> setServicePath (String args) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarSrvGroupClass_setServicePath',[this.starTag,args]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarSrvGroupClass_setServicePath',[this.starTag,args]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
-  } 
+    }
+  }
   /*--StarSrvGroupClass_servicePathIsSet--*/
   Future<bool> servicePathIsSet() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_servicePathIsSet',[this.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_servicePathIsSet',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  }   
+    }
+  }
   /*--StarSrvGroupClass_getCurrentPath--*/
   Future<String> getCurrentPath() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_getCurrentPath',[this.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_getCurrentPath',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
-  }     
+    }
+  }
   /*--StarSrvGroupClass_importService--*/
   Future<bool> importService (String serviceName,bool loadRunModule) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_importService',[this.starTag,serviceName,loadRunModule]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_importService',[this.starTag,serviceName,loadRunModule]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  }   
+    }
+  }
 
   /*--StarSrvGroupClass_clearServiceEx--*/
   Future<void> clearServiceEx() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarSrvGroupClass_clearServiceEx',[this.starTag]);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarSrvGroupClass_clearServiceEx',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
-  }      
+    }
+  }
 
   /*--StarSrvGroupClass_runScript--*/
   Future<bool> runScript (String scriptInterface,String scriptBuf,String moduleName) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_runScript',[this.starTag,scriptInterface,scriptBuf,moduleName]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_runScript',[this.starTag,scriptInterface,scriptBuf,moduleName]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  }     
+    }
+  }
 
   /*--StarSrvGroupClass_runScriptEx--*/
   Future<bool> runScriptEx (String scriptInterface,StarBinBufClass binBuf,String moduleName) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_runScriptEx',[this.starTag,scriptInterface,binBuf.starTag,moduleName]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_runScriptEx',[this.starTag,scriptInterface,binBuf.starTag,moduleName]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  }     
+    }
+  }
 
   /*--StarSrvGroupClass_doFile--*/
   Future<bool> doFile (String scriptInterface,String fileName) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_doFile',[this.starTag,scriptInterface,fileName]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_doFile',[this.starTag,scriptInterface,fileName]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  }  
+    }
+  }
   /*--StarSrvGroupClass_doFileEx--*/
   Future<bool> doFileEx (String scriptInterface,String fileName,String moduleName) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_doFileEx',[this.starTag,scriptInterface,fileName,moduleName]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_doFileEx',[this.starTag,scriptInterface,fileName,moduleName]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  }   
+    }
+  }
   /*--StarSrvGroupClass_setClientPort--*/
   Future<bool> setClientPort (String lInterface,int portnumber) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_setClientPort',[this.starTag,lInterface,portnumber]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_setClientPort',[this.starTag,lInterface,portnumber]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  } 
+    }
+  }
   /*--StarSrvGroupClass_setTelnetPort--*/
   Future<bool> setTelnetPort (int portnumber) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_setTelnetPort',[this.starTag,portnumber]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_setTelnetPort',[this.starTag,portnumber]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
+    }
   }
   /*--StarSrvGroupClass_setOutputPort--*/
   Future<bool> setOutputPort (String host,int portnumber) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_setOutputPort',[this.starTag,host,portnumber]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_setOutputPort',[this.starTag,host,portnumber]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
+    }
   }
   /*--StarSrvGroupClass_setWebServerPort--*/
   Future<bool> setWebServerPort (String host,int portnumber,int connectionNumber,int postSize) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_setWebServerPort',[this.starTag,host,portnumber,connectionNumber,postSize]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_setWebServerPort',[this.starTag,host,portnumber,connectionNumber,postSize]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  }          
+    }
+  }
   /*--StarSrvGroupClass_initRaw--*/
   Future<bool> initRaw (String scriptInterface,StarServiceClass service) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_initRaw',[this.starTag,scriptInterface,service.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_initRaw',[this.starTag,scriptInterface,service.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  }   
+    }
+  }
   /*--StarSrvGroupClass_loadRawModule--*/
   Future<bool> loadRawModule (String scriptInterface,String moduleName,String fileOrString, bool isString) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_loadRawModule',[this.starTag,scriptInterface,moduleName,fileOrString,isString]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_loadRawModule',[this.starTag,scriptInterface,moduleName,fileOrString,isString]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  } 
+    }
+  }
   /*--StarSrvGroupClass_getLastError--*/
   Future<int> getLastError () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_getLastError',[this.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_getLastError',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return 0;
-    }      
+    }
   }
   /*--StarSrvGroupClass_getLastErrorInfo--*/
   Future<String> getLastErrorInfo () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_getLastErrorInfo',[this.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_getLastErrorInfo',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return "";
-    }      
+    }
   }
   /*--StarSrvGroupClass_getCorePath--*/
   Future<String> getCorePath () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_getCorePath',[this.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_getCorePath',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return "";
-    }      
+    }
   }
   /*--StarSrvGroupClass_getUserPath--*/
   Future<String> getUserPath () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_getUserPath',[this.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_getUserPath',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return "";
-    }      
+    }
   }
   /*--StarSrvGroupClass_getLocalIP--*/
   Future<String> getLocalIP () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_getLocalIP',[this.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_getLocalIP',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return "127.0.0.1";
-    }      
+    }
   }
   /*--StarSrvGroupClass_getLocalIPEx--*/
   Future<List> getLocalIPEx () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object result = await Starflut.channel.invokeMethod('StarSrvGroupClass_getLocalIPEx',[this.starTag]);     
-        return Starflut.processOutputArgs(result);              
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object result = await Starflut.channel.invokeMethod('StarSrvGroupClass_getLocalIPEx',[this.starTag]);
+      return Starflut.processOutputArgs(result);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return ["127.0.0.1"];
-    }      
-  }    
+    }
+  }
   /*--StarSrvGroupClass_getObjectNum--*/
   Future<int> getObjectNum () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarSrvGroupClass_getObjectNum',[this.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarSrvGroupClass_getObjectNum',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return 0;
-    }      
+    }
   }
   /*--StarSrvGroupClass_activeScriptInterface--*/
   Future<List> activeScriptInterface (String scriptInterfaceName) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object result = await Starflut.channel.invokeMethod('StarSrvGroupClass_activeScriptInterface',[this.starTag,scriptInterfaceName]);   
-        return Starflut.processOutputArgs(result);                
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object result = await Starflut.channel.invokeMethod('StarSrvGroupClass_activeScriptInterface',[this.starTag,scriptInterfaceName]);
+      return Starflut.processOutputArgs(result);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return [false,false];
-    }      
+    }
   }
   /*--StarSrvGroupClass_preCompile--*/
   Future<List> preCompile (String scriptInterfaceName,String scriptSegment) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object result = await Starflut.channel.invokeMethod('StarSrvGroupClass_preCompile',[this.starTag,scriptInterfaceName,scriptSegment]);        
-        return Starflut.processOutputArgs(result);           
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object result = await Starflut.channel.invokeMethod('StarSrvGroupClass_preCompile',[this.starTag,scriptInterfaceName,scriptSegment]);
+      return Starflut.processOutputArgs(result);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return [false,"error..."];
-    }      
+    }
   }
 
 
@@ -1877,7 +1967,7 @@ class StarServiceClass extends StarCoreBase {
     this.starTag = starTag;
     this.starId = starId;
   }
-  
+
   @override
   bool isEqual(StarCoreBase des)
   {
@@ -1893,350 +1983,350 @@ class StarServiceClass extends StarCoreBase {
 
   Future<String> getString() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        String result = await Starflut.channel.invokeMethod('StarServiceClass_toString',[this.starTag]);   
-        return result;                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      String result = await Starflut.channel.invokeMethod('StarServiceClass_toString',[this.starTag]);
+      return result;
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return "Instance of 'StarServiceClass'";
-    } 
+    }
   }
 
   /*--StarServiceClass_get--*/
   Future<Object> operator [](Object object) async{
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object retVal = await Starflut.channel.invokeMethod('StarServiceClass_get',[this.starTag,object]);  
-        if( retVal is String){
-          String val = retVal;
-          if( val.startsWith(Starflut.StarSrvGroupPrefix)){
-            StarSrvGroupClass lSrvGroup = Starflut.getStarSrvGroupFromRecordByTag(val);
-            if( lSrvGroup == null ){
-              lSrvGroup = new StarSrvGroupClass(val);
-              Starflut.starObjectRecordListRoot.add(new StarObjectRecordClass(lSrvGroup,"StarSrvGroupClass",2));  //---add root
-            }
-            return lSrvGroup;                         
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object retVal = await Starflut.channel.invokeMethod('StarServiceClass_get',[this.starTag,object]);
+      if( retVal is String){
+        String val = retVal;
+        if( val.startsWith(Starflut.StarSrvGroupPrefix)){
+          StarSrvGroupClass lSrvGroup = Starflut.getStarSrvGroupFromRecordByTag(val);
+          if( lSrvGroup == null ){
+            lSrvGroup = new StarSrvGroupClass(val);
+            Starflut.starObjectRecordListRoot.add(new StarObjectRecordClass(lSrvGroup,"StarSrvGroupClass",2));  //---add root
           }
+          return lSrvGroup;
         }
-        return retVal;
+      }
+      return retVal;
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    } 
+    }
   }
-  
+
   /*--StarServiceClass_getObject--*/
   Future<StarObjectClass> getObject (String objectName) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        String lTag = await Starflut.channel.invokeMethod('StarServiceClass_getObject',[this.starTag,objectName]); 
-        if( lTag == null )
-            return null;
-        else{
-          List<String> tags = lTag.split("+");
-          StarObjectClass lObject = Starflut.getObjectFromRecordById(tags[1]);
-          if( lObject == null ){            
-            lObject = new StarObjectClass(tags[0],tags[1]);
-            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lObject,"StarObjectClass",2));
-          }else{
-            Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
-          }
-          return lObject;            
-        }                           
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      String lTag = await Starflut.channel.invokeMethod('StarServiceClass_getObject',[this.starTag,objectName]);
+      if( lTag == null )
+        return null;
+      else{
+        List<String> tags = lTag.split("+");
+        StarObjectClass lObject = Starflut.getObjectFromRecordById(tags[1]);
+        if( lObject == null ){
+          lObject = new StarObjectClass(tags[0],tags[1]);
+          Starflut.starObjectRecordList.add(new StarObjectRecordClass(lObject,"StarObjectClass",2));
+        }else{
+          Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
+        }
+        return lObject;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
-  }  
-  
+    }
+  }
+
   /*--StarServiceClass_getObjectEx--*/
   Future<StarObjectClass> getObjectEx (String objectID) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        String lTag = await Starflut.channel.invokeMethod('StarServiceClass_getObjectEx',[this.starTag,objectID]);    
-        if( lTag == null )
-            return null;
-        else{
-          List<String> tags = lTag.split("+");
-          StarObjectClass lObject = Starflut.getObjectFromRecordById(tags[1]);
-          if( lObject == null ){            
-            lObject = new StarObjectClass(tags[0],tags[1]);
-            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lObject,"StarObjectClass",2));
-          }else{
-            Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
-          }
-          return lObject;           
-        }                        
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      String lTag = await Starflut.channel.invokeMethod('StarServiceClass_getObjectEx',[this.starTag,objectID]);
+      if( lTag == null )
+        return null;
+      else{
+        List<String> tags = lTag.split("+");
+        StarObjectClass lObject = Starflut.getObjectFromRecordById(tags[1]);
+        if( lObject == null ){
+          lObject = new StarObjectClass(tags[0],tags[1]);
+          Starflut.starObjectRecordList.add(new StarObjectRecordClass(lObject,"StarObjectClass",2));
+        }else{
+          Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
+        }
+        return lObject;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
-  }  
+    }
+  }
 
   /*--StarServiceClass_newObject--*/
   Future<StarObjectClass> newObject (List args) async
   {
-     try {       
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }        
-        String lTag = await Starflut.channel.invokeMethod('StarServiceClass_newObject',[this.starTag,Starflut.processInputArgs(args)]);  
-        if( lTag == null )
-            return null;
-        else{
-          List<String> tags = lTag.split("+");
-          StarObjectClass lObject = Starflut.getObjectFromRecordById(tags[1]);
-          if( lObject == null ){           
-            lObject = new StarObjectClass(tags[0],tags[1]);
-            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lObject,"StarObjectClass",2));
-          }else{
-            Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
-          }
-          return lObject;            
-        }                           
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      String lTag = await Starflut.channel.invokeMethod('StarServiceClass_newObject',[this.starTag,Starflut.processInputArgs(args)]);
+      if( lTag == null )
+        return null;
+      else{
+        List<String> tags = lTag.split("+");
+        StarObjectClass lObject = Starflut.getObjectFromRecordById(tags[1]);
+        if( lObject == null ){
+          lObject = new StarObjectClass(tags[0],tags[1]);
+          Starflut.starObjectRecordList.add(new StarObjectRecordClass(lObject,"StarObjectClass",2));
+        }else{
+          Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
+        }
+        return lObject;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
-  }  
+    }
+  }
 
   /*--StarServiceClass_runScript--*/
   Future<List> runScript (String scriptInterface,String scriptBuf,String moduleName,String workDirectory) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object result = await Starflut.channel.invokeMethod('StarServiceClass_runScript',[this.starTag,scriptInterface,scriptBuf,moduleName,workDirectory]);   
-        return Starflut.processOutputArgs(result);                
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object result = await Starflut.channel.invokeMethod('StarServiceClass_runScript',[this.starTag,scriptInterface,scriptBuf,moduleName,workDirectory]);
+      return Starflut.processOutputArgs(result);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return [false,"error..."];
-    }      
-  }     
+    }
+  }
 
   /*--StarServiceClass_runScriptEx--*/
   Future<List> runScriptEx (String scriptInterface,StarBinBufClass binBuf,String moduleName,String workDirectory) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object result = await Starflut.channel.invokeMethod('StarServiceClass_runScriptEx',[this.starTag,scriptInterface,binBuf.starTag,moduleName,workDirectory]);        
-        return Starflut.processOutputArgs(result);           
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object result = await Starflut.channel.invokeMethod('StarServiceClass_runScriptEx',[this.starTag,scriptInterface,binBuf.starTag,moduleName,workDirectory]);
+      return Starflut.processOutputArgs(result);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return [false,"error..."];
-    }      
-  }   
+    }
+  }
   /*--StarServiceClass_doFile--*/
   Future<List> doFile (String scriptInterface,String fileName,String workDirectory) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object result = await Starflut.channel.invokeMethod('StarServiceClass_doFile',[this.starTag,scriptInterface,fileName,workDirectory]);    
-        return Starflut.processOutputArgs(result);               
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object result = await Starflut.channel.invokeMethod('StarServiceClass_doFile',[this.starTag,scriptInterface,fileName,workDirectory]);
+      return Starflut.processOutputArgs(result);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return [false,"error..."];
-    }      
-  }  
+    }
+  }
   /*--StarServiceClass_doFileEx--*/
   Future<List> doFileEx (String scriptInterface,String fileName,String workDirectory,String moduleName) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object result = await Starflut.channel.invokeMethod('StarServiceClass_doFileEx',[this.starTag,scriptInterface,fileName,moduleName]); 
-        return Starflut.processOutputArgs(result);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object result = await Starflut.channel.invokeMethod('StarServiceClass_doFileEx',[this.starTag,scriptInterface,fileName,moduleName]);
+      return Starflut.processOutputArgs(result);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return [false,"error..."];
-    }      
-  }   
+    }
+  }
   /*--StarServiceClass_isServiceRegistered--*/
   Future<bool> isServiceRegistered () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarServiceClass_isServiceRegistered',[this.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarServiceClass_isServiceRegistered',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  }    
+    }
+  }
   /*--StarServiceClass_checkPassword--*/
   Future<void> checkPassword (bool flag) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarServiceClass_checkPassword',[this.starTag,flag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarServiceClass_checkPassword',[this.starTag,flag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
-  }    
+    }
+  }
   /*--StarServiceClass_newRawProxy--*/
   Future<StarObjectClass> newRawProxy (String scriptInterface,StarObjectClass attachObject,String attachFunction,String proyInfo,int proxyType) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        if( attachObject == null || (!(attachObject is StarObjectClass)) )
-          return null;
-        String lTag = await Starflut.channel.invokeMethod('StarServiceClass_newRawProxy',[this.starTag,scriptInterface,attachObject.starTag,attachFunction,proyInfo,proxyType]);                   
-        if( lTag == null )
-            return null;
-        else{
-          List<String> tags = lTag.split("+");
-          StarObjectClass lObject = Starflut.getObjectFromRecordById(tags[1]);
-          if( lObject == null ){            
-            lObject = new StarObjectClass(tags[0],tags[1]);
-            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lObject,"StarObjectClass",2));
-          }else{
-            Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
-          }
-          return lObject;            
-        }         
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      if( attachObject == null || (!(attachObject is StarObjectClass)) )
+        return null;
+      String lTag = await Starflut.channel.invokeMethod('StarServiceClass_newRawProxy',[this.starTag,scriptInterface,attachObject.starTag,attachFunction,proyInfo,proxyType]);
+      if( lTag == null )
+        return null;
+      else{
+        List<String> tags = lTag.split("+");
+        StarObjectClass lObject = Starflut.getObjectFromRecordById(tags[1]);
+        if( lObject == null ){
+          lObject = new StarObjectClass(tags[0],tags[1]);
+          Starflut.starObjectRecordList.add(new StarObjectRecordClass(lObject,"StarObjectClass",2));
+        }else{
+          Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
+        }
+        return lObject;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
-  }   
+    }
+  }
   /*--StarServiceClass_importRawContext--*/
   Future<StarObjectClass> importRawContext (String scriptInterface,String contextName,bool isClass,String contextInfo) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        String lTag = await Starflut.channel.invokeMethod('StarServiceClass_importRawContext',[this.starTag,scriptInterface,contextName,isClass,contextInfo]);                   
-        if( lTag == null )
-            return null;
-        else{
-          List<String> tags = lTag.split("+");
-          StarObjectClass lObject = Starflut.getObjectFromRecordById(tags[1]);
-          if( lObject == null ){           
-            lObject = new StarObjectClass(tags[0],tags[1]);
-            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lObject,"StarObjectClass",2));
-          }else{
-            Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
-          }
-          return lObject;          
-        }         
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      String lTag = await Starflut.channel.invokeMethod('StarServiceClass_importRawContext',[this.starTag,scriptInterface,contextName,isClass,contextInfo]);
+      if( lTag == null )
+        return null;
+      else{
+        List<String> tags = lTag.split("+");
+        StarObjectClass lObject = Starflut.getObjectFromRecordById(tags[1]);
+        if( lObject == null ){
+          lObject = new StarObjectClass(tags[0],tags[1]);
+          Starflut.starObjectRecordList.add(new StarObjectRecordClass(lObject,"StarObjectClass",2));
+        }else{
+          Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
+        }
+        return lObject;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
-  }   
+    }
+  }
   /*--StarServiceClass_getLastError--*/
   Future<int> getLastError () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarServiceClass_getLastError',[this.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarServiceClass_getLastError',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return 0;
-    }      
+    }
   }
   /*--StarServiceClass_getLastErrorInfo--*/
   Future<String> getLastErrorInfo () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarServiceClass_getLastErrorInfo',[this.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarServiceClass_getLastErrorInfo',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return "";
-    }      
+    }
   }
-  
+
   /*--StarServiceClass_allObject--*/
   Future<List> allObject () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object result = await Starflut.channel.invokeMethod('StarServiceClass_allObject',[this.starTag]); 
-        return Starflut.processOutputArgs(result);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object result = await Starflut.channel.invokeMethod('StarServiceClass_allObject',[this.starTag]);
+      return Starflut.processOutputArgs(result);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return [false,"error..."];
-    }      
-  }   
+    }
+  }
 
   /*--StarServiceClass_restfulCall--*/
   Future<List> restfulCall (String url, String opCode, String jsonString) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object result = await Starflut.channel.invokeMethod('StarServiceClass_restfulCall',[this.starTag,url,opCode,jsonString]); 
-        return Starflut.processOutputArgs(result);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object result = await Starflut.channel.invokeMethod('StarServiceClass_restfulCall',[this.starTag,url,opCode,jsonString]);
+      return Starflut.processOutputArgs(result);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return [400,"{\"code\": -32600, \"message\": \"call _RestfulCall failed,input para error\"}"];
-    }      
-  }     
+    }
+  }
 
 }
 
@@ -2249,7 +2339,7 @@ class StarParaPkgClass extends StarCoreBase {
   }
 
   @override
-   bool isEqual(StarCoreBase des)
+  bool isEqual(StarCoreBase des)
   {
     if( identical(this,des ) )
       return true;
@@ -2258,18 +2348,18 @@ class StarParaPkgClass extends StarCoreBase {
 
   Future<String> getString() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        String result = await Starflut.channel.invokeMethod('StarParaPkgClass_toString',[this.starTag]);   
-        return result;                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      String result = await Starflut.channel.invokeMethod('StarParaPkgClass_toString',[this.starTag]);
+      return result;
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return "Instance of 'StarParaPkgClass'";
-    } 
+    }
   }
 
   Future<int> get number async
@@ -2284,125 +2374,125 @@ class StarParaPkgClass extends StarCoreBase {
 
   /*--StarParaPkgClass_get--*/
   Future<Object> operator [](int index) async{
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object retVal = await Starflut.channel.invokeMethod('StarParaPkgClass_get',[this.starTag,index]);  
-        if( retVal is String){
-          String val = retVal;
-          if( val.startsWith(Starflut.StarObjectPrefix)){
-            List<String> tags = val.split("+");
-            StarObjectClass lStarObject = Starflut.getObjectFromRecordById(tags[1]);
-            if( lStarObject == null ){            
-              lStarObject = new StarObjectClass(tags[0],tags[1]);
-              Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarObject,"StarObjectClass",2));
-            }else{
-              Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
-            }
-            return lStarObject;                         
-          }else if( val.startsWith(Starflut.StarBinBufPrefix)){
-            StarBinBufClass lStarBinBuf = new StarBinBufClass(val);
-            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarBinBuf,"StarBinBufClass",2));
-            return lStarBinBuf;   
-          }else if( val.startsWith(Starflut.StarParaPkgPrefix)){
-            StarParaPkgClass lStarParaPkg = new StarParaPkgClass(val);
-            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarParaPkg,"StarParaPkgClass",2));
-            return lStarParaPkg;                
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object retVal = await Starflut.channel.invokeMethod('StarParaPkgClass_get',[this.starTag,index]);
+      if( retVal is String){
+        String val = retVal;
+        if( val.startsWith(Starflut.StarObjectPrefix)){
+          List<String> tags = val.split("+");
+          StarObjectClass lStarObject = Starflut.getObjectFromRecordById(tags[1]);
+          if( lStarObject == null ){
+            lStarObject = new StarObjectClass(tags[0],tags[1]);
+            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarObject,"StarObjectClass",2));
+          }else{
+            Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
           }
+          return lStarObject;
+        }else if( val.startsWith(Starflut.StarBinBufPrefix)){
+          StarBinBufClass lStarBinBuf = new StarBinBufClass(val);
+          Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarBinBuf,"StarBinBufClass",2));
+          return lStarBinBuf;
+        }else if( val.startsWith(Starflut.StarParaPkgPrefix)){
+          StarParaPkgClass lStarParaPkg = new StarParaPkgClass(val);
+          Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarParaPkg,"StarParaPkgClass",2));
+          return lStarParaPkg;
         }
-        return retVal;
+      }
+      return retVal;
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    } 
+    }
   }
   /*--StarParaPkgClass_clear--*/
   Future<StarParaPkgClass> clear () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarParaPkgClass_clear',[this.starTag]);                   
-        return this;
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarParaPkgClass_clear',[this.starTag]);
+      return this;
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return this;
-    }      
+    }
   }
   /*--StarParaPkgClass_appendFrom--*/
   Future<bool> appendFrom (StarParaPkgClass srcParaPkg) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarParaPkgClass_appendFrom',[this.starTag,srcParaPkg.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarParaPkgClass_appendFrom',[this.starTag,srcParaPkg.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
+    }
   }
 
   /*--StarParaPkgClass_equals--*/
   Future<bool> equals (StarParaPkgClass srcParaPkg) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarParaPkgClass_equals',[this.starTag,srcParaPkg.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarParaPkgClass_equals',[this.starTag,srcParaPkg.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  }  
+    }
+  }
 
   Future<Object> getValue(Object value) async{
-    try {    
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }      
-        Object result = await Starflut.channel.invokeMethod('StarParaPkgClass_get',[this.starTag,value]);
-        if( (result is List) || (result is Map) ){
-          return Starflut.processOutputArgs(result);
-        }else{
-          List rr = Starflut.processOutputArgs([result]);
-          return rr[0];
-        }
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object result = await Starflut.channel.invokeMethod('StarParaPkgClass_get',[this.starTag,value]);
+      if( (result is List) || (result is Map) ){
+        return Starflut.processOutputArgs(result);
+      }else{
+        List rr = Starflut.processOutputArgs([result]);
+        return rr[0];
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
+    }
   }
 
   Future<StarParaPkgClass> setValue(int index,Object value) async{
-    try {    
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }      
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
       if( value is StarObjectClass ){
         StarObjectClass vo = value;
         await Starflut.channel.invokeMethod('StarParaPkgClass_set',[this.starTag,index,vo.starTag]);
       }else if( value is StarParaPkgClass ){
         StarParaPkgClass vo = value;
-        await Starflut.channel.invokeMethod('StarParaPkgClass_set',[this.starTag,index,vo.starTag]);  
+        await Starflut.channel.invokeMethod('StarParaPkgClass_set',[this.starTag,index,vo.starTag]);
       }else if( value is StarBinBufClass ){
         StarBinBufClass vo = value;
-        await Starflut.channel.invokeMethod('StarParaPkgClass_set',[this.starTag,index,vo.starTag]);     
-      }else{       
+        await Starflut.channel.invokeMethod('StarParaPkgClass_set',[this.starTag,index,vo.starTag]);
+      }else{
         await Starflut.channel.invokeMethod('StarParaPkgClass_set',[this.starTag,index,value]);
       }
       return this;
@@ -2410,151 +2500,151 @@ class StarParaPkgClass extends StarCoreBase {
     on PlatformException catch (e){
       print( "{$e.message}");
       return this;
-    }      
+    }
   }
   /*--StarParaPkgClass_build--*/
   Future<StarParaPkgClass> build (Object args) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarParaPkgClass_build',[this.starTag,args]);                   
-        return this;
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarParaPkgClass_build',[this.starTag,args]);
+      return this;
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return this;
-    }      
+    }
   }
   /*--StarParaPkgClass_free--*/
   Future<void> free () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarParaPkgClass_free',[this.starTag]);     
-        _free();              
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarParaPkgClass_free',[this.starTag]);
+      _free();
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
+    }
   }
   /*--StarParaPkgClass_dispose--*/
   Future<void> dispose () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarParaPkgClass_dispose',[this.starTag]);        
-        _free();           
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarParaPkgClass_dispose',[this.starTag]);
+      _free();
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
-  }  
+    }
+  }
   /*--StarParaPkgClass_releaseOwner--*/
   Future<void> releaseOwner () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarParaPkgClass_releaseOwner',[this.starTag]);    
-        _free();               
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarParaPkgClass_releaseOwner',[this.starTag]);
+      _free();
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
-  }  
+    }
+  }
   /*--StarParaPkgClass_asDict--*/
   Future<StarParaPkgClass> asDict (bool isDict) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarParaPkgClass_asDict',[this.starTag,isDict]);   
-        return this;                
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarParaPkgClass_asDict',[this.starTag,isDict]);
+      return this;
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return this;
-    }      
-  } 
+    }
+  }
   /*--StarParaPkgClass_isDict--*/
   Future<bool> isDict () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarParaPkgClass_isDict',[this.starTag]);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarParaPkgClass_isDict',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  } 
+    }
+  }
   /*--StarParaPkgClass_fromJSon--*/
   Future<bool> fromJSon (String jsonstring) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarParaPkgClass_fromJSon',[this.starTag,jsonstring]);                
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarParaPkgClass_fromJSon',[this.starTag,jsonstring]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  } 
+    }
+  }
   /*--StarParaPkgClass_toJSon--*/
   Future<String> toJSon () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarParaPkgClass_toJSon',[this.starTag]);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarParaPkgClass_toJSon',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return "";
-    }      
-  } 
+    }
+  }
   /*--StarParaPkgClass_toTuple--*/
   Future<Object> toTuple () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object result = await Starflut.channel.invokeMethod('StarParaPkgClass_toTuple',[this.starTag]);                  
-        if( result != null ) /*must be list or map--*/
-        {
-          return Starflut.processOutputArgs(result);
-        }else{
-          return null;
-        }
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object result = await Starflut.channel.invokeMethod('StarParaPkgClass_toTuple',[this.starTag]);
+      if( result != null ) /*must be list or map--*/
+      {
+        return Starflut.processOutputArgs(result);
+      }else{
+        return null;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
-  }   
+    }
+  }
 }
 
 /*------StarBinBufClass---*/
@@ -2575,19 +2665,19 @@ class StarBinBufClass extends StarCoreBase {
 
   Future<String> getString() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        String result = await Starflut.channel.invokeMethod('StarBinBufClass_toString',[this.starTag]);   
-        return result;                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      String result = await Starflut.channel.invokeMethod('StarBinBufClass_toString',[this.starTag]);
+      return result;
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return "Instance of 'StarBinBufClass'";
-    } 
-  }  
+    }
+  }
   Future<int> get offset async
   {
     return await Starflut.channel.invokeMethod('StarBinBufClass_GetOffset',[this.starTag]);
@@ -2595,136 +2685,136 @@ class StarBinBufClass extends StarCoreBase {
   /*--StarBinBufClass_init--*/
   Future<void> init (int bufSize) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarBinBufClass_init',[this.starTag,bufSize]);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarBinBufClass_init',[this.starTag,bufSize]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
-  } 
+    }
+  }
   /*--StarBinBufClass_clear--*/
   Future<void> clear (int bufSize) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarBinBufClass_clear',[this.starTag]);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarBinBufClass_clear',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
-  }   
+    }
+  }
   /*--StarBinBufClass_saveToFile--*/
   Future<bool> saveToFile (String fileName,bool txtFileFlag) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarBinBufClass_saveToFile',[this.starTag,fileName,txtFileFlag]);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarBinBufClass_saveToFile',[this.starTag,fileName,txtFileFlag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  }   
+    }
+  }
   /*--StarBinBufClass_loadFromFile--*/
   Future<bool> loadFromFile (String fileName,bool txtFileFlag) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarBinBufClass_loadFromFile',[this.starTag,fileName,txtFileFlag]);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarBinBufClass_loadFromFile',[this.starTag,fileName,txtFileFlag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
+    }
   }
   /*--StarBinBufClass_read--*/
   Future<Uint8List> read (int offset,int length) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarBinBufClass_read',[this.starTag,offset,length]);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarBinBufClass_read',[this.starTag,offset,length]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return new Uint8List(0);
-    }      
-  }  
+    }
+  }
   /*--StarBinBufClass_write--*/
   Future<int> write (int offset,Uint8List buf,int length) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarBinBufClass_write',[this.starTag,offset,buf,length]);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarBinBufClass_write',[this.starTag,offset,buf,length]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return 0;
-    }      
-  } 
+    }
+  }
   /*--StarBinBufClass_free--*/
   Future<void> free () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarBinBufClass_free',[this.starTag]);      
-        _free();             
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarBinBufClass_free',[this.starTag]);
+      _free();
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
+    }
   }
   /*--StarBinBufClass_dispose--*/
   Future<void> dispose () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarBinBufClass_dispose',[this.starTag]);    
-        _free();               
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarBinBufClass_dispose',[this.starTag]);
+      _free();
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
-  }  
+    }
+  }
   /*--StarBinBufClass_releaseOwner--*/
   Future<void> releaseOwner () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarBinBufClass_releaseOwner',[this.starTag]);      
-        _free();             
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarBinBufClass_releaseOwner',[this.starTag]);
+      _free();
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
-  } 
+    }
+  }
 
 }
 
@@ -2760,333 +2850,333 @@ class StarObjectClass extends StarCoreBase {
         return true;
     }
     return false;
-  }  
+  }
   Future<String> getString() async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        String result = await Starflut.channel.invokeMethod('StarObjectClass_toString',[this.starTag]);   
-        return result;                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      String result = await Starflut.channel.invokeMethod('StarObjectClass_toString',[this.starTag]);
+      return result;
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return "Instance of 'StarObjectClass'";
-    } 
-  }  
+    }
+  }
   /*--StarObjectClass_get--*/
   Future<Object> operator [](Object indexOrName) async{
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object retVal = await Starflut.channel.invokeMethod('StarObjectClass_get',[this.starTag,indexOrName]);  
-        if( retVal is String){
-          String val = retVal;
-          if( val.startsWith(Starflut.StarObjectPrefix)){
-            List<String> tags = val.split("+");
-            StarObjectClass lStarObject = Starflut.getObjectFromRecordById(tags[1]);
-            if( lStarObject == null ){                
-              lStarObject = new StarObjectClass(tags[0],tags[1]);
-              Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarObject,"StarObjectClass",2));
-            }else{
-              Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
-            }
-            return lStarObject;                         
-          }else if( val.startsWith(Starflut.StarBinBufPrefix)){
-            StarBinBufClass lStarBinBuf = new StarBinBufClass(val);
-            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarBinBuf,"StarBinBufClass",2));
-            return lStarBinBuf;   
-          }else if( val.startsWith(Starflut.StarParaPkgPrefix)){
-            StarParaPkgClass lStarParaPkg = new StarParaPkgClass(val);
-            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarParaPkg,"StarParaPkgClass",2));
-            return lStarParaPkg;    
-          }else if( val.startsWith(Starflut.StarServicePrefix)){
-            List<String> tags = val.split("+");
-            StarServiceClass lStarService = Starflut.getObjectFromRecordById(tags[1]);
-            if( lStarService == null ){               
-              lStarService = new StarServiceClass(tags[0],tags[1]);
-              Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarService,"StarServiceClass",2));
-            }else{
-              Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
-            }
-            return lStarService;                           
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object retVal = await Starflut.channel.invokeMethod('StarObjectClass_get',[this.starTag,indexOrName]);
+      if( retVal is String){
+        String val = retVal;
+        if( val.startsWith(Starflut.StarObjectPrefix)){
+          List<String> tags = val.split("+");
+          StarObjectClass lStarObject = Starflut.getObjectFromRecordById(tags[1]);
+          if( lStarObject == null ){
+            lStarObject = new StarObjectClass(tags[0],tags[1]);
+            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarObject,"StarObjectClass",2));
+          }else{
+            Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
           }
+          return lStarObject;
+        }else if( val.startsWith(Starflut.StarBinBufPrefix)){
+          StarBinBufClass lStarBinBuf = new StarBinBufClass(val);
+          Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarBinBuf,"StarBinBufClass",2));
+          return lStarBinBuf;
+        }else if( val.startsWith(Starflut.StarParaPkgPrefix)){
+          StarParaPkgClass lStarParaPkg = new StarParaPkgClass(val);
+          Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarParaPkg,"StarParaPkgClass",2));
+          return lStarParaPkg;
+        }else if( val.startsWith(Starflut.StarServicePrefix)){
+          List<String> tags = val.split("+");
+          StarServiceClass lStarService = Starflut.getObjectFromRecordById(tags[1]);
+          if( lStarService == null ){
+            lStarService = new StarServiceClass(tags[0],tags[1]);
+            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarService,"StarServiceClass",2));
+          }else{
+            Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
+          }
+          return lStarService;
         }
-        return retVal;
+      }
+      return retVal;
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    } 
+    }
   }
 
   /*--StarObjectClass_get--*/
   Future<Object> getValue(Object indexOrNameOrList) async{
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object result = await Starflut.channel.invokeMethod('StarObjectClass_get',[this.starTag,indexOrNameOrList]);  
-        if( (result is List) || (result is Map) ){
-          return Starflut.processOutputArgs(result);
-        }else{
-          List rr = Starflut.processOutputArgs([result]);
-          return rr[0];
-        }
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object result = await Starflut.channel.invokeMethod('StarObjectClass_get',[this.starTag,indexOrNameOrList]);
+      if( (result is List) || (result is Map) ){
+        return Starflut.processOutputArgs(result);
+      }else{
+        List rr = Starflut.processOutputArgs([result]);
+        return rr[0];
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    } 
-  }  
+    }
+  }
 
   Future<void> setValue(Object indexOrName,Object value) async{
-    try {    
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }      
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
       if( value is StarObjectClass ){
         StarObjectClass vo = value;
         await Starflut.channel.invokeMethod('StarObjectClass_set',[this.starTag,indexOrName,vo.starTag]);
       }else if( value is StarParaPkgClass ){
         StarParaPkgClass vo = value;
-        await Starflut.channel.invokeMethod('StarObjectClass_set',[this.starTag,indexOrName,vo.starTag]);  
+        await Starflut.channel.invokeMethod('StarObjectClass_set',[this.starTag,indexOrName,vo.starTag]);
       }else if( value is StarBinBufClass ){
         StarBinBufClass vo = value;
-        await Starflut.channel.invokeMethod('StarObjectClass_set',[this.starTag,indexOrName,vo.starTag]);     
-      }else{       
+        await Starflut.channel.invokeMethod('StarObjectClass_set',[this.starTag,indexOrName,vo.starTag]);
+      }else{
         await Starflut.channel.invokeMethod('StarObjectClass_set',[this.starTag,indexOrName,value]);
       }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
-  }  
+    }
+  }
 
   /*--StarObjectClass_call--*/
   Future<Object> call (String funcName,List args) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object retVal = await Starflut.channel.invokeMethod('StarObjectClass_call',[this.starTag,funcName,Starflut.processInputArgs(args)]);                  
-        if( retVal is String){
-          String val = retVal;
-          if( val.startsWith(Starflut.StarObjectPrefix)){
-            List<String> tags = val.split("+");
-            StarObjectClass lStarObject = Starflut.getObjectFromRecordById(tags[1]);
-            if( lStarObject == null ){                
-              lStarObject = new StarObjectClass(tags[0],tags[1]);
-              Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarObject,"StarObjectClass",2));
-            }else{
-              Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
-            }
-            return lStarObject;                         
-          }else if( val.startsWith(Starflut.StarBinBufPrefix)){
-            StarBinBufClass lStarBinBuf = new StarBinBufClass(val);
-            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarBinBuf,"StarBinBufClass",2));
-            return lStarBinBuf;   
-          }else if( val.startsWith(Starflut.StarParaPkgPrefix)){
-            StarParaPkgClass lStarParaPkg = new StarParaPkgClass(val);
-            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarParaPkg,"StarParaPkgClass",2));
-            return lStarParaPkg;    
-          }else if( val.startsWith(Starflut.StarServicePrefix)){
-            List<String> tags = val.split("+");
-            StarServiceClass lStarService = Starflut.getObjectFromRecordById(tags[1]);
-            if( lStarService == null ){             
-              lStarService = new StarServiceClass(tags[0],tags[1]);
-              Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarService,"StarServiceClass",2));
-            }else{
-              Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
-            }
-            return lStarService;                           
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object retVal = await Starflut.channel.invokeMethod('StarObjectClass_call',[this.starTag,funcName,Starflut.processInputArgs(args)]);
+      if( retVal is String){
+        String val = retVal;
+        if( val.startsWith(Starflut.StarObjectPrefix)){
+          List<String> tags = val.split("+");
+          StarObjectClass lStarObject = Starflut.getObjectFromRecordById(tags[1]);
+          if( lStarObject == null ){
+            lStarObject = new StarObjectClass(tags[0],tags[1]);
+            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarObject,"StarObjectClass",2));
+          }else{
+            Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
           }
+          return lStarObject;
+        }else if( val.startsWith(Starflut.StarBinBufPrefix)){
+          StarBinBufClass lStarBinBuf = new StarBinBufClass(val);
+          Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarBinBuf,"StarBinBufClass",2));
+          return lStarBinBuf;
+        }else if( val.startsWith(Starflut.StarParaPkgPrefix)){
+          StarParaPkgClass lStarParaPkg = new StarParaPkgClass(val);
+          Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarParaPkg,"StarParaPkgClass",2));
+          return lStarParaPkg;
+        }else if( val.startsWith(Starflut.StarServicePrefix)){
+          List<String> tags = val.split("+");
+          StarServiceClass lStarService = Starflut.getObjectFromRecordById(tags[1]);
+          if( lStarService == null ){
+            lStarService = new StarServiceClass(tags[0],tags[1]);
+            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lStarService,"StarServiceClass",2));
+          }else{
+            Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
+          }
+          return lStarService;
         }
-        return retVal;        
+      }
+      return retVal;
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
+    }
   }
 
   /*--StarObjectClass_newObject--*/
   Future<StarObjectClass> newObject (List args) async
   {
-     try {       
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }        
-        String lTag = await Starflut.channel.invokeMethod('StarObjectClass_newObject',[this.starTag,Starflut.processInputArgs(args)]);  
-        if( lTag == null )
-            return null;
-        else{
-          List<String> tags = lTag.split("+");
-          StarObjectClass lObject = Starflut.getObjectFromRecordById(tags[1]);
-          if( lObject == null ){           
-            lObject = new StarObjectClass(tags[0],tags[1]);
-            Starflut.starObjectRecordList.add(new StarObjectRecordClass(lObject,"StarObjectClass",2));
-          }else{
-            Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
-          }
-          return lObject;            
-        }                           
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      String lTag = await Starflut.channel.invokeMethod('StarObjectClass_newObject',[this.starTag,Starflut.processInputArgs(args)]);
+      if( lTag == null )
+        return null;
+      else{
+        List<String> tags = lTag.split("+");
+        StarObjectClass lObject = Starflut.getObjectFromRecordById(tags[1]);
+        if( lObject == null ){
+          lObject = new StarObjectClass(tags[0],tags[1]);
+          Starflut.starObjectRecordList.add(new StarObjectRecordClass(lObject,"StarObjectClass",2));
+        }else{
+          Starflut.starObjectRecordFrameWaitFree.add(tags[0]);
+        }
+        return lObject;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
-  }  
+    }
+  }
   /*--StarObjectClass_free--*/
   Future<void> free () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarObjectClass_free',[this.starTag]);   
-        _free();                
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarObjectClass_free',[this.starTag]);
+      _free();
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
+    }
   }
   /*--StarObjectClass_dispose--*/
   Future<void> dispose () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarObjectClass_dispose',[this.starTag]);    
-        _free();               
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarObjectClass_dispose',[this.starTag]);
+      _free();
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
-  }     
+    }
+  }
   /*--StarObjectClass_hasRawContext--*/
   Future<bool> hasRawContext () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarObjectClass_hasRawContext',[this.starTag]);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarObjectClass_hasRawContext',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return false;
-    }      
-  } 
+    }
+  }
   /*--StarObjectClass_rawToParaPkg--*/
   Future<Object> rawToParaPkg () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        Object result = await Starflut.channel.invokeMethod('StarObjectClass_rawToParaPkg',[this.starTag]);     
-        if( result != null ){
-          return Starflut.processOutputArgs(result);
-        }else{
-          return null;
-        }            
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      Object result = await Starflut.channel.invokeMethod('StarObjectClass_rawToParaPkg',[this.starTag]);
+      if( result != null ){
+        return Starflut.processOutputArgs(result);
+      }else{
+        return null;
+      }
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return null;
-    }      
-  }    
+    }
+  }
   /*--StarObjectClass_getSourceScript--*/
   Future<int> getSourceScript () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarObjectClass_getSourceScript',[this.starTag]);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarObjectClass_getSourceScript',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return 0;
-    }      
-  }      
+    }
+  }
   Future<int> getLastError () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarObjectClass_getLastError',[this.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarObjectClass_getLastError',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return 0;
-    }      
+    }
   }
   /*--StarObjectClass_getLastErrorInfo--*/
   Future<String> getLastErrorInfo () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarObjectClass_getLastErrorInfo',[this.starTag]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarObjectClass_getLastErrorInfo',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return "";
-    }      
+    }
   }
   /*--StarObjectClass_releaseOwnerEx--*/
   Future<void> releaseOwnerEx () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        await Starflut.channel.invokeMethod('StarObjectClass_releaseOwnerEx',[this.starTag]);  
-        _free();                 
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarObjectClass_releaseOwnerEx',[this.starTag]);
+      _free();
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
-  } 
+    }
+  }
   /*--StarObjectClass_regScriptProcP--*/
   Map<String,StarObjectScriptProc> scriptCallBack;
   Future<void> regScriptProcP(String scriptName,StarObjectScriptProc callBack) async
   {
     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }      
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
       if( callBack == null){
         if( scriptCallBack[scriptName] != null )
-          await Starflut.channel.invokeMethod('StarObjectClass_regScriptProcP',[this.starTag,scriptName,false]); 
-        scriptCallBack.remove(scriptName);                
+          await Starflut.channel.invokeMethod('StarObjectClass_regScriptProcP',[this.starTag,scriptName,false]);
+        scriptCallBack.remove(scriptName);
       }else{
         if( scriptCallBack[scriptName] == null )
           await Starflut.channel.invokeMethod('StarObjectClass_regScriptProcP',[this.starTag,scriptName,true]);
-        scriptCallBack[scriptName] = callBack;        
+        scriptCallBack[scriptName] = callBack;
       }
 
       lock();
@@ -3094,58 +3184,106 @@ class StarObjectClass extends StarCoreBase {
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }    
-  }  
+    }
+  }
 
   /*--StarObjectClass_instNumber--*/
   Future<int> instNumber () async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarObjectClass_instNumber',[this.starTag]);                  
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarObjectClass_instNumber',[this.starTag]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return 0;
-    }      
-  }   
+    }
+  }
 
   /*--StarObjectClass_changeParent--*/
   Future<void> changeParent (StarObjectClass parentObject,String queueName) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        if( parentObject == null || (!(parentObject is StarObjectClass)) )
-          await Starflut.channel.invokeMethod('StarObjectClass_changeParent',[this.starTag,null,queueName]);   
-        else
-          await Starflut.channel.invokeMethod('StarObjectClass_changeParent',[this.starTag,parentObject.starTag,queueName]);           
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      if( parentObject == null || (!(parentObject is StarObjectClass)) )
+        await Starflut.channel.invokeMethod('StarObjectClass_changeParent',[this.starTag,null,queueName]);
+      else
+        await Starflut.channel.invokeMethod('StarObjectClass_changeParent',[this.starTag,parentObject.starTag,queueName]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
-    }      
-  }   
+    }
+  }
 
   /*--StarObjectClass_jsonCall--*/
   Future<String> jsonCall (String jsonString) async
   {
-     try {
-        if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
-          await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
-          Starflut.starObjectRecordFrameWaitFree = new List<String>();
-        }       
-        return await Starflut.channel.invokeMethod('StarObjectClass_jsonCall',[this.starTag,jsonString]);                   
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarObjectClass_jsonCall',[this.starTag,jsonString]);
     }
     on PlatformException catch (e){
       print( "{$e.message}");
       return "{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32603, \"message\": \"call _JSonCall failed,Internal error\"}, \"id\": null}";
-    }      
-  }  
+    }
+  }
+
+  /*--StarObjectClass_active--*/
+  Future<bool> active () async
+  {
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarObjectClass_active',[this.starTag]);
+    }
+    on PlatformException catch (e){
+      print( "{$e.message}");
+      return false;
+    }
+  }
+
+  /*--StarObjectClass_deActive--*/
+  Future<void> deActive () async
+  {
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      await Starflut.channel.invokeMethod('StarObjectClass_deActive',[this.starTag]);
+    }
+    on PlatformException catch (e){
+      print( "{$e.message}");
+      return;
+    }
+  }
+
+  /*--StarObjectClass_isActive--*/
+  Future<bool> isActive () async
+  {
+    try {
+      if( Starflut.starObjectRecordFrameWaitFree.length != 0 ){
+        await Starflut.channel.invokeMethod('starcore_poplocalframe',Starflut.starObjectRecordFrameWaitFree);
+        Starflut.starObjectRecordFrameWaitFree = new List<String>();
+      }
+      return await Starflut.channel.invokeMethod('StarObjectClass_isActive',[this.starTag]);
+    }
+    on PlatformException catch (e){
+      print( "{$e.message}");
+      return false;
+    }
+  }
 
 }
 

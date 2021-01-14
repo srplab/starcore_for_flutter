@@ -1,9 +1,10 @@
 #
-# To learn more about a Podspec see http://guides.cocoapods.org/syntax/podspec.html
+# To learn more about a Podspec see http://guides.cocoapods.org/syntax/podspec.html.
+# Run `pod lib lint starflut.podspec' to validate before publishing.
 #
 Pod::Spec.new do |s|
   s.name             = 'starflut'
-  s.version          = '0.6.0'
+  s.version          = '0.9.0'
   s.summary          = 'bridge for flutter interact with other programming languages'
   s.description      = <<-DESC
 bridge for flutter interact with other programming languages, such as c/c++ lua, python, ruby, golang, rust, etc.
@@ -13,92 +14,149 @@ bridge for flutter interact with other programming languages, such as c/c++ lua,
   s.author           = { 'srplab' => 'srplab.cn@hotmail.com' }
   s.source           = { :path => '.' }
 
-  s.source_files = 'Classes/**/*.{m,mm}'
-
-  s.public_header_files = 'Classes/**/*.{h}'
-  #s.header_mappings_dir = './Classes'
+  s.source_files = 'Classes/**/*'
+  #s.public_header_files = 'Classes/**/*.h'  #do not set this
 
   s.dependency 'Flutter'
+  s.platform = :ios, '8.0'
 
   #basic config
   v_STARCORE_PATH = ENV['STARCORE_PATH']                             # '/Users/srplab/Desktop'
-  v_STARCORE_PYTHONVERSION = ENV['STARCORE_PYTHONVERSION']           # '3.7' '3.6'   '3.5'    '2.7'
-  v_STARCORE_PYTHONLIBRARY = ENV['STARCORE_PYTHONLIBRARY']           # 'star_python36,python3.6m'
-  v_STARCORE_RUBYVERSION = ENV['STARCORE_RUBYVERSION']               # '2.4'   '2.5
+
+  v_STARCORE_PYTHONVERSION = ENV['STARCORE_PYTHONVERSION']           # '3.9'  '3.8'  3.7' '3.6'   '3.5'    '2.7'
+  v_STARCORE_PYTHONCOREPATH = ENV['STARCORE_PYTHONCOREPATH']         # the folder of 'python3.6m' 'python3.6.zip' or 'python3.7m','pyton3.7.zip'...
+
+  v_STARCORE_RUBYCOREPATH = ENV['STARCORE_RUBYCOREPATH']             # the folder of 'ruby 2.4'   'ruby 2.5',...
+
+  v_STARCORE_GOLIBRARY = ENV['STARCORE_GOLIBRARY']                   # name of go static library, ex: if the name is libxxx.a, then here is 'xxx'. Important, the 'xxx_GetExportFunctionTable()' must exist.
   v_STARCORE_GOLIBRARYPATH = ENV['STARCORE_GOLIBRARYPATH']           # '/Users/srplab/Desktop/go.study'
-  v_STARCORE_EXPORTDEFINE = ENV['STARCORE_EXPORTDEFINE']             # 'extern\ \"C\"\ void\ *star_go_GetExportFunctionTable();'
-  v_STARCORE_EXPORTFUNCTION = ENV['STARCORE_EXPORTFUNCTION']         # 'star_go_GetExportFunctionTable();'
-  v_STARCORE_EXPORTLIBRARY = ENV['STARCORE_EXPORTLIBRARY']           # 'star_go,vsopenapi_c_stub'
-  v_STARCORE_EXPORTLIBRARYPATH = ENV['STARCORE_EXPORTLIBRARYPATH']   # '/Users/srplab/Desktop/go.study'
+
+  #other share library
+  #for GetExportFunctionTable function, user this
+  v_STARCORE_GETEXPORTFUNCTIONTABLENAME = ENV['STARCORE_GETEXPORTFUNCTIONTABLENAME']  # 'xxx_GetExportFunctionTable,yyy_GetExportFunctionTable'
+
+  #or else, use this
+  v_STARCORE_EXPORTFUNCTIONDEFINE = ENV['STARCORE_EXPORTFUNCTIONDEFINE'] # 'extern \"C\" void *xxx();extern \"C\" void *yyy();'
+  v_STARCORE_EXPORTFUNCTIONNAME = ENV['STARCORE_EXPORTFUNCTIONNAME'] # 'xxx,yyy'
+
+  #static library name and path
+  v_STARCORE_STATICLIBRARY = ENV['STARCORE_STATICLIBRARY']           # name of static library, ex: if the name is libxxx.a, then here is 'xxx'
+  v_STARCORE_STATICLIBRARYPATH = ENV['STARCORE_STATICLIBRARYPATH']   # 'the folder of the static library
 
 
-  starcore_path =  v_STARCORE_PATH   # such as  '$(HOME)/Desktop'
+  starcore_path =  v_STARCORE_PATH   # such as  '/Users/srplab/Desktop', must use absolute path
 
-  if v_STARCORE_EXPORTDEFINE == nil then
-    v_STARCORE_EXPORTDEFINE = ''
-  end
-  starcore_moduleexport_define = v_STARCORE_EXPORTDEFINE
-  if (v_STARCORE_GOLIBRARYPATH != nil) && (v_STARCORE_GOLIBRARYPATH.length != 0) then
-    starcore_moduleexport_define = starcore_moduleexport_define + 'extern\ \"C\"\ void\ *star_go_GetExportFunctionTable();'
-  end
+  starcore_moduleexport_define = ''
+  starcore_moduleexport_call = ''
 
-        #begin
-        #  export function define of starcore service module, for example 
-        #
-        #  starcore_moduleexport_define = 'extern\ \"C\"\ void\ *xxx_GetExportFunctionTable();extern\ \"C\"\ void\ *yyy_GetExportFunctionTable();'
-        #=end
-
-  if v_STARCORE_EXPORTFUNCTION == nil then
-    v_STARCORE_EXPORTFUNCTION = ''
-  end
-  starcore_moduleexport_call = v_STARCORE_EXPORTFUNCTION
-  if (v_STARCORE_GOLIBRARYPATH != nil) && (v_STARCORE_GOLIBRARYPATH.length != 0) then
-    starcore_moduleexport_call = starcore_moduleexport_call + 'star_go_GetExportFunctionTable();'
+  if (v_STARCORE_EXPORTFUNCTIONDEFINE != nil) && (v_STARCORE_EXPORTFUNCTIONDEFINE.length != 0) then
+      starcore_moduleexport_define = starcore_moduleexport_define + v_STARCORE_EXPORTFUNCTIONDEFINE
   end
 
-        #=begin
-        #  export function call of starcore service module, for example 
-        #
-        #  starcore_moduleexport_call = 'xxx_GetExportFunctionTable();yyy_GetExportFunctionTable();'
-        #=end
+  if (v_STARCORE_EXPORTFUNCTIONNAME != nil) && (v_STARCORE_EXPORTFUNCTIONNAME.length != 0) then
+    v_STARCORE_EXPORTFUNCTIONNAME.split(',').each do |name|
+      if( starcore_moduleexport_call.length == 0 ) then
+          starcore_moduleexport_call = starcore_moduleexport_call + '(long)' + name;
+      else
+          starcore_moduleexport_call = starcore_moduleexport_call + ',(long)'+ name;
+      end
+    end
+  end
+
+  #function GETEXPORTFUNCTIONTABLE
+  if (v_STARCORE_GETEXPORTFUNCTIONTABLENAME != nil) && (v_STARCORE_GETEXPORTFUNCTIONTABLENAME.length != 0) then
+    v_STARCORE_GETEXPORTFUNCTIONTABLENAME.split(',').each do |name|
+      starcore_moduleexport_define = starcore_moduleexport_define + 'extern\ \"C\"\ void\ *' + name + '();'
+      if( starcore_moduleexport_call.length == 0 ) then
+          starcore_moduleexport_call = starcore_moduleexport_call + '(long)' + name;
+      else
+          starcore_moduleexport_call = starcore_moduleexport_call + ',(long)'+ name;
+      end
+    end
+  end
+
+  if (v_STARCORE_GOLIBRARY == nil) then
+    v_STARCORE_GOLIBRARY = 'star_go';
+  end
+  if (v_STARCORE_GOLIBRARYPATH != nil) && (v_STARCORE_GOLIBRARYPATH.length != 0) && (v_STARCORE_GOLIBRARY != nil) && (v_STARCORE_GOLIBRARY.length != 0) then
+    starcore_moduleexport_define = starcore_moduleexport_define + 'extern\ \"C\"\ void\ *' + v_STARCORE_GOLIBRARY + '_GetExportFunctionTable();'
+    if( starcore_moduleexport_call.length == 0 ) then
+        starcore_moduleexport_call = starcore_moduleexport_call + '(long)' + v_STARCORE_GOLIBRARY + '_GetExportFunctionTable';
+    else
+        starcore_moduleexport_call = starcore_moduleexport_call + ',(long)' + v_STARCORE_GOLIBRARY + '_GetExportFunctionTable';
+    end
+  end
 
   compiler_flags = '-Wno-unused-function -DENV_IOS' + ' -DENV_MODULEEXPORT='+starcore_moduleexport_define + ' -DENV_MODULECALL='+starcore_moduleexport_call
   link_flags = 'iconv','stdc++','starcore'  # need linked with libstarcore.a
-  header_flags = starcore_path+'/starcore_for_ios/include'
-  library_flags = starcore_path+'/starcore_for_ios'
+  header_flags = "$(inherited) " + Dir::pwd+"/Classes " + starcore_path+'/starcore_for_ios/include'
+  library_flags = "$(inherited) " + starcore_path+'/starcore_for_ios'
 
   #python config
-  if (v_STARCORE_PYTHONVERSION != nil) && (v_STARCORE_PYTHONVERSION.length != 0) && (v_STARCORE_PYTHONLIBRARY != nil) && (v_STARCORE_PYTHONLIBRARY.length != 0) then
-    compiler_flags = compiler_flags + ' -DENV_WITHPYTHON=\"python'+v_STARCORE_PYTHONVERSION+'\"'    #support python  : python3.6,python3.5,python2.7
-    link_flags =  link_flags + v_STARCORE_PYTHONLIBRARY.split(',') + ['sqlite3','ssl','crypto']   # 'star_python36','python3.6m'
-    library_flags = library_flags + ' '+starcore_path+'/starcore_for_ios/python.files/python-'+v_STARCORE_PYTHONVERSION
+  if (v_STARCORE_PYTHONVERSION != nil) && (v_STARCORE_PYTHONVERSION.length != 0) && (v_STARCORE_PYTHONCOREPATH != nil) && (v_STARCORE_PYTHONCOREPATH.length != 0 ) then
+    compiler_flags = compiler_flags + ' -DENV_WITHPYTHON=\"python'+v_STARCORE_PYTHONVERSION+'\"'    #support python  : python3.9,python3.8,python3.7,python3.6,python3.5,python2.7
+    link_flags =  link_flags + ['sqlite3','ssl','crypto']
+    if( v_STARCORE_PYTHONVERSION == "3.9" ) then
+        link_flags =  link_flags + ['star_python39','python3.9']
+        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.9.zip'+' '+Dir::pwd+'/python3.9.zip'
+        s.resource = ['python3.9.zip']
+    elsif( v_STARCORE_PYTHONVERSION == "3.8" ) then
+        link_flags =  link_flags + ['star_python38','python3.8']
+        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.8.zip'+' '+Dir::pwd+'/python3.8.zip'
+        s.resource = ['python3.8.zip']
+    elsif( v_STARCORE_PYTHONVERSION == "3.7" ) then
+        link_flags =  link_flags + ['star_python37','python3.7m']
+        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.7.zip'+' '+Dir::pwd+'/python3.7.zip'
+        s.resource = ['python3.7.zip']
+    elsif( v_STARCORE_PYTHONVERSION == "3.6" ) then
+        link_flags =  link_flags + ['star_python36','python3.6m']
+        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.6.zip'+' '+Dir::pwd+'/python3.6.zip'
+        s.resource = ['python3.6.zip']
+    elsif( v_STARCORE_PYTHONVERSION == "3.5" ) then
+        link_flags =  link_flags + ['star_python35','python3.5m']
+        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.5.zip'+' '+Dir::pwd+'/python3.5.zip'
+        s.resource = ['python3.5.zip']
+    elsif( v_STARCORE_PYTHONVERSION == "2.7" ) then
+        link_flags =  link_flags + ['starpy','python2.7']
+        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python2.7.zip'+' '+Dir::pwd+'/python2.7.zip'
+        s.resource = ['python2.7.zip']
+    end
+    library_flags = library_flags + ' '+ v_STARCORE_PYTHONCOREPATH
   end
 
   #ruby config
-  if (v_STARCORE_RUBYVERSION != nil) && (v_STARCORE_RUBYVERSION.length != 0) then
+  if (v_STARCORE_RUBYCOREPATH != nil) && (v_STARCORE_RUBYCOREPATH.length != 0) then
     compiler_flags = compiler_flags + ' -DENV_WITHRUBY'
     link_flags =  link_flags + ['star_ruby','ruby-exts','ruby-static','trans','sqlite3','ssl','crypto']
-    library_flags = library_flags + ' '+starcore_path+'/starcore_for_ios/ruby.files/ruby-'+v_STARCORE_RUBYVERSION   # 2.4, 2.5, etc
+    library_flags = library_flags + ' '+ v_STARCORE_RUBYCOREPATH
   end
 
   #golang config
-  if (v_STARCORE_GOLIBRARYPATH != nil) && (v_STARCORE_GOLIBRARYPATH.length != 0) then
-    link_flags =  link_flags + ['star_go','vsopenapi_c_stub']
+  if (v_STARCORE_GOLIBRARYPATH != nil) && (v_STARCORE_GOLIBRARYPATH.length != 0) && (v_STARCORE_GOLIBRARY != nil) && (v_STARCORE_GOLIBRARY.length != 0) then
+    link_flags =  link_flags + [v_STARCORE_GOLIBRARY,'vsopenapi_c_stub']
     library_flags = library_flags + ' '+v_STARCORE_GOLIBRARYPATH
   end
 
   #other library config
-  if (v_STARCORE_EXPORTLIBRARY != nil) && (v_STARCORE_EXPORTLIBRARY.length != 0) then
-    link_flags =  link_flags + v_STARCORE_EXPORTLIBRARY.split(',')
+  if (v_STARCORE_STATICLIBRARY != nil) && (v_STARCORE_STATICLIBRARY.length != 0) then
+    v_STARCORE_STATICLIBRARY.split(',').each do |name|
+      link_flags =  link_flags + [name]
+    end
   end
-  if (v_STARCORE_EXPORTLIBRARYPATH != nil) && (v_STARCORE_EXPORTLIBRARYPATH.length != 0 ) then
-    library_flags = library_flags + ' '+v_STARCORE_EXPORTLIBRARYPATH
+
+  if (v_STARCORE_STATICLIBRARYPATH != nil) && (v_STARCORE_STATICLIBRARYPATH.length != 0 ) then
+    v_STARCORE_STATICLIBRARYPATH.split(',').each do |name|
+      library_flags = library_flags + ' '+ name;
+    end
   end
 
   s.compiler_flags = compiler_flags
   s.ios.library = link_flags
   s.xcconfig = {'HEADER_SEARCH_PATHS' => header_flags,'LIBRARY_SEARCH_PATHS' => library_flags }
-  
-  s.ios.deployment_target = '8.0'
+
+  # Flutter.framework does not contain a i386 slice.
+  s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }
+  s.swift_version = '5.0'
 end
+
 

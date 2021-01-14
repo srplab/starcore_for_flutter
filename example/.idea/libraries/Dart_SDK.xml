@@ -7,6 +7,7 @@
       <root url="file://$USER_HOME$/flutter/flutter/bin/cache/dart-sdk/lib/convert" />
       <root url="file://$USER_HOME$/flutter/flutter/bin/cache/dart-sdk/lib/core" />
       <root url="file://$USER_HOME$/flutter/flutter/bin/cache/dart-sdk/lib/developer" />
+      <root url="file://$USER_HOME$/flutter/flutter/bin/cache/dart-sdk/lib/ffi" />
       <root url="file://$USER_HOME$/flutter/flutter/bin/cache/dart-sdk/lib/html" />
       <root url="file://$USER_HOME$/flutter/flutter/bin/cache/dart-sdk/lib/indexed_db" />
       <root url="file://$USER_HOME$/flutter/flutter/bin/cache/dart-sdk/lib/io" />

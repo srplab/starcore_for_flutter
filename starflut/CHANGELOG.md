@@ -1,35 +1,8 @@
-## 0.6.0
+## 0.0.1
 
-* release at 2019/08/01
-* starcore upgrade to 3.5.0
+* supports flutter to interact with other scripting languages such as python, java, ruby, golang, rust, etc. It is easy to use, supports android, ios, and desktop
 
-* Newly added API Interface:
-> StarServiceClass:
-  >> [allObject](#)            : Future<List> allObject() async 
-  >> [restfulCall](#)          : Future<List> restfulCall (String url, String opCode, String jsonString) async
+## 0.9.0
 
-> StarParaPkg:
-  >> [equals](#)               : Future<bool> equals (StarParaPkgClass srcParaPkg) async
-  >> [v](#)                    : Future<String> get ValueStr async
-
-> StarObject :
-  >> [instNumber](#)           : Future<int> instNumber () async
-  >> [jsonCall](#)             : Future<String> jsonCall (String jsonString) async
-
- 
-## 0.5.2
-
-* release at 2018/08/03
- - bug fix
- - starcore upgrade to 2.6.5 for android
-
-## 0.5.1
-
-* release at 2018/07/29
- - slightly modified readme
-
-## 0.5.0
-
-* First release at 2018/07/22
- - support lua,python,ruby,golang
- - support ios, android
+* add support for macos,windows,linux
+* add more interface functions.

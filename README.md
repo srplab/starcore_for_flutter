@@ -4,6 +4,28 @@ A new flutter plugin project, which supports flutter to interact with other scri
 
 starflut is based on "starcore-for-android" and "starfore-for-ios project". 
 
+## 0.9.0 version  2021/01/13
+
+* support ios, android, and desktop( windows, linux, macos )
+* based on starcore 3.7.5
+* support python 3.7,3.8,3.9
+* Newly added API Interface:
+
+> Starflut:
+  >>[getPlatform](#)          : static Future<int> getPlatform() async, note:return value : starflut.ANDROID, IOS, WINDOWS, LINUX, MACOS, WEB
+  >>[setEnv](#)               : static Future<bool> setEnv(String Name,String Value) async,note: android does not support this
+  >>[getEnv](#)               : static Future<String> getEnv(String Name) async,note: android does not support this
+  >>[loadLibrary](#)          : static Future<bool> loadLibrary(String name) async,load sharelibrarynote: ios does not support this
+  >>[copyFileFromAssetsEx](#) : static Future<bool> copyFileFromAssetsEx(String name,String srcRelatePath,String desRelatePath,bool OverwriteIfExist) async
+
+> StarCoreFactory:
+  >>[setShareLibraryPath](#)  : Future<void> setShareLibraryPath(String path) async, note: macos, windows, linux. the location of script interface share library, such as : libstarpy.dylib/so...
+
+> StarObject:
+  >>[active](#)    : Future<bool> active () async
+  >>[deActive](#)  : Future<void> deActive () async
+  >>[isActive](#)  : Future<bool> isActive () async
+
 ## 0.6.0 version  2019/08/01
 
 * support starcore 3.5.0
@@ -45,87 +67,165 @@ For help getting started with Flutter, view offical site
 
 ### 2. How to use, with an example of calling python
 
+**For Android**
 
-- a. ** Create project **
-
-
-```sh
-$ flutter create teststarflut
-```
-
-- b. ** Modify "pubspec.yaml", add "starflut" package **
+create sub folder under "main" and add python share libraries as follow
 
 ```
-dev_dependencies:
-  flutter_test:
-    sdk: flutter
-
-  starflut:
-        path: ../starcore_for_flutter/starflut
-```
-
-- c. ** For android, create sub folder under "main" and add python share libraries as follow **
-
-```
-android
-  app
-    src
-      main
-        assets
-          unicodedata.cpython-36m.so
-          zlib.cpython-36m.so
-        java
-        jniLibs
-          arm64-v8a
-            libpython3.6m.so
-            libstar_python36.so
-          armeabi 
-            libpython3.6m.so
-            libstar_python36.so
-          armeabi-v7a
-            libpython3.6m.so
-            libstar_python36.so
-          x86
-            libpython3.6m.so
-            libstar_python36.so
-          x86_64
-            libpython3.6m.so
-            libstar_python36.so
+[app]
+  [src]
+    [main]
+      [assets]
+        [arm64-v8a]
+          unicodedata.cpython-39.so
+          zlib.cpython-39.so
+        [armeabi]
+          unicodedata.cpython-39.so
+          zlib.cpython-39.so
+        [x86]
+          unicodedata.cpython-39.so
+          zlib.cpython-39.so
+        [x86_64]
+          unicodedata.cpython-39.so
+          zlib.cpython-39.so  
+        python3.9.zip
+      [java]
+        [jniLibs]
+          [arm64-v8a]
+            libpython3.9.so
+            libstar_python39.so
+          [armeabi] 
+            libpython3.9.so
+            libstar_python39.so
+          [x86]
+            libpython3.9.so
+            libstar_python39.so
+          [x86_64]
+            libpython3.9.so
+            libstar_python39.so
         res
 ```
 
-- d. ** For ios, define the environment variable based on the features used **
+***Add code in main.dart***
 
-1. set "STARCORE_PATH" to the folder of "starcore_for_ios"
-2. if starcore native service is used, set "STARCORE_EXPORTDEFINE" ,"STARCORE_EXPORTFUNCTION", "STARCORE_EXPORTLIBRARY", and ,  "STARCORE_EXPORTLIBRARYPATH"
-3. if python is used, set "STARCORE_PYTHONVERSION" and "STARCORE_PYTHONLIBRARY"
-4. if ruby is used, set "STARCORE_RUBYVERSION"
-5. if golang module is used ,set "STARCORE_GOLIBRARYPATH", where "libstar_go.a" and "libvsopenapi_c_stub.a" is located
+copy python files (share libraries and python3.9.zip) to app folder using function "copyFileFromAssets"
 
 ```
-STARCORE_PATH              # '/Users/srplab/Desktop'
+bool isAndroid = await Starflut.isAndroid();
+if( isAndroid == true ){
+  await Starflut.copyFileFromAssets("testcallback.py", "flutter_assets/starfiles","flutter_assets/starfiles");
+  await Starflut.copyFileFromAssets("testpy.py", "flutter_assets/starfiles","flutter_assets/starfiles");
+  await Starflut.copyFileFromAssets("python3.9.zip", null,null);   //desRelatePath must be null
 
-STARCORE_PYTHONVERSION     # '3.6'   '3.5'    '2.7'
-STARCORE_PYTHONLIBRARY     # 'star_python36,python3.6m'
+  var nativepath = await Starflut.getNativeLibraryDir();
+  var LibraryPath = "";
+  if( nativepath.contains("x86_64"))
+    LibraryPath = "x86_64";
+  else if( nativepath.contains("arm64"))
+    LibraryPath = "arm64-v8a";
+  else if( nativepath.contains("arm"))
+    LibraryPath = "armeabi";
+  else if( nativepath.contains("x86"))
+    LibraryPath = "x86";
 
-STARCORE_RUBYVERSION       # '2.4'   '2.5
+  await Starflut.copyFileFromAssets("zlib.cpython-39.so", LibraryPath,null);
+  await Starflut.copyFileFromAssets("unicodedata.cpython-39.so", LibraryPath,null);
+  await Starflut.loadLibrary("libpython3.9.so");
+}
+```
 
-STARCORE_GOLIBRARYPATH     # '/Users/srplab/Desktop/go.study'
 
-STARCORE_EXPORTDEFINE      # 'extern\ \"C\"\ void\ *star_go_GetExportFunctionTable();'
-STARCORE_EXPORTFUNCTION    # 'star_go_GetExportFunctionTable();'
-STARCORE_EXPORTLIBRARY     # 'star_go,vsopenapi_c_stub'
-STARCORE_EXPORTLIBRARYPATH # '/Users/srplab/Desktop/go.study'
+**For IOS**
 
+Using environment variable to control the compiling process.
+
+1. set "STARCORE_PATH" to the folder of "starcore_for_ios"
+2. if python is used, set "STARCORE_PYTHONVERSION" and "STARCORE_PYTHONCOREPATH"
+>[STARCORE_PYTHONVERSION](#)  : '3.9'  '3.8'  3.7' '3.6'   '3.5'    '2.7'
+>[STARCORE_PYTHONCOREPATH](#) :the folder of 'python3.6m' 'python3.6.zip' or 'python3.7m','pyton3.7.zip'...
+3. if ruby is used, set "STARCORE_RUBYCOREPATH"
+>[STARCORE_RUBYCOREPATH](#): the folder of 'ruby 2.4'   'ruby 2.5',...
+4. if golang module is used ,set "STARCORE_GOLIBRARY",and "STARCORE_GOLIBRARYPATH". 
+>[STARCORE_GOLIBRARY](#) : name of go static library, ex: if the name is libxxx.a, then here is 'xxx'
+>[STARCORE_GOLIBRARYPATH](#) : where static library is located
+5. if starcore native service is used, set "STARCORE_GETEXPORTFUNCTIONTABLENAME" ,"STARCORE_EXPORTFUNCTIONDEFINE", "STARCORE_EXPORTFUNCTIONNAME", "STARCORE_STATICLIBRARY", and "STARCORE_STATICLIBRARYPATH"
+>[STARCORE_GETEXPORTFUNCTIONTABLENAME](#) : if the function name is xxx_GetExportFunctionTable,yyy_GetExportFunctionTable, then here is xxx,yyy
+>[STARCORE_EXPORTFUNCTIONDEFINE](#) : 'extern \"C\" void *xxx();extern \"C\" void *yyy();'
+>[v_STARCORE_EXPORTFUNCTIONNAME](#) : 'xxx,yyy'
+>[STARCORE_STATICLIBRARY](#) : name of static library, ex: if the name is libxxx.a, then here is 'xxx'
+>[STARCORE_STATICLIBRARYPATH](#) : the folder of the static library
+
+```
 for example
 $ flutter clean
-$ export STARCORE_PATH='/Users/srplab/Desktop'
-$ export STARCORE_PYTHONVERSION='3.6'
-$ export STARCORE_PYTHONLIBRARY='star_python36,python3.6m'
+$ export STARCORE_PATH="/Users/srplab/Desktop"
+$ export STARCORE_PYTHONVERSION="3.9"
+$ export STARCORE_PYTHONCOREPATH="/Users/srplab/Desktop/python-3.9"
 $ flutter build ios --no-codesign
 ```
 
-- d. ** Python file to be called **
+```
+for example
+$ flutter clean
+$ export STARCORE_PATH="/Users/srplab/Desktop"
+$ export STARCORE_GOLIBRARYPATH="/Users/srplab/Desktop/go.lib"
+$ flutter build ios --no-codesign
+```
+
+**For Windows**
+
+* create folder under [windows], copy share libraries into the folder, for example,
+```
+  [windows]
+    [starcore]
+      libstar_python39.pyd
+```      
+* modify "CMakeLists.txt", instal the share libraries needed.
+```
+install(FILES "starcore/libstar_python39.pyd" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+  COMPONENT Runtime)
+```
+
+**For linux**
+
+* create folder under [linux], copy share libraries into the folder, for example,
+```
+  [linux]
+    [starcore]
+      libstar_python39.so
+```      
+* modify "CMakeLists.txt", instal the share libraries needed.
+```
+install(FILES "starcore/libstar_python39.so" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
+  COMPONENT Runtime)  
+```
+
+**For macos**
+
+>open the xxx.xcworkspace with xcode.
+>click "Runner", and under the "build phase" > "Copy Bundle Resources"
+>add file,
+>>libstar_python39.so: which is from the folder "unlink" of starcore.
+>>libpython3.9.dylib: compiled from source code of python3.9
+  
+```
+String Path1  = await Starflut.getResourcePath();
+if( Platform == Starflut.MACOS ) {
+      /*macos*/
+      await starcore.setShareLibraryPath(
+          Path1); //set path for interface library
+      await Starflut.loadLibrary(
+          Path1 + "/libpython3.9.dylib");
+      await Starflut.setEnv("PYTHONPATH",
+          "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9");
+}          
+```          
+
+The "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9" is folder of python script, which may be changed.
+
+
+
+**Add Python file to be called**
 
 1. create folder "starfiles" under the project, add python scripts. ** The folder name must be "starfiles" **
 
@@ -150,84 +250,35 @@ flutter:
     - starfiles/
 ```
 
-3. testpy.py
+**Call python code**
 
-```python
-def tt(a,b) :
-    print(a,b)
-    return 666,777
-g1 = 123
-def yy(a,b,z) :
-    print(a,b,z)
-    return {'jack': 4098, 'sape': 4139}
+1.Init starcore
 
-class Multiply :
-    def __init__(self,x,y) :
-        self.a = x
-        self.b = y
-    
-    def multiply(self,a,b):
-        print("multiply....",self,a,b)
-        return a * b
+```
+StarCoreFactory starcore = await Starflut.getFactory();
+await starcore.regMsgCallBackP(
+            (int serviceGroupID, int uMsg, Object wParam, Object lParam) async{
+          print("$serviceGroupID  $uMsg   $wParam   $lParam");
+          return null;
+        });
+
+StarServiceClass Service = await starcore.initSimple("test", "123", 0, 0, []);
+StarSrvGroupClass SrvGroup = await Service["_ServiceGroup"];
 ```
 
-- d. ** main.dart **
+2.Init python
 
-```dart
-  Future<void> testCallPython() async {
-    StarCoreFactory starcore = await Starflut.getFactory();
-    StarServiceClass Service = await starcore.initSimple("test", "123", 0, 0, []);
-    await starcore.regMsgCallBackP(
-        (int serviceGroupID, int uMsg, Object wParam, Object lParam) async{
-      print("$serviceGroupID  $uMsg   $wParam   $lParam");
-      return null;
-    });
-    StarSrvGroupClass SrvGroup = await Service["_ServiceGroup"];
-
-    /*---script python--*/
-    bool isAndroid = await Starflut.isAndroid();
-    if( isAndroid == true ){
-      await Starflut.copyFileFromAssets("testpy.py", "flutter_assets/starfiles","flutter_assets/starfiles");
-      await Starflut.copyFileFromAssets("python3.6.zip", "flutter_assets/starfiles",null);  //desRelatePath must be null 
-      await Starflut.copyFileFromAssets("zlib.cpython-36m.so", null,null);
-      await Starflut.copyFileFromAssets("unicodedata.cpython-36m.so", null,null);
-      await Starflut.loadLibrary("libpython3.6m.so");
-    }
-
-    String docPath = await Starflut.getDocumentPath();
-    print("docPath = $docPath");
-
-    String resPath = await Starflut.getResourcePath();
-    print("resPath = $resPath");
-
-    dynamic rr1 = await SrvGroup.initRaw("python36", Service);
-
-    print("initRaw = $rr1");
-		var Result = await SrvGroup.loadRawModule("python", "", resPath + "/flutter_assets/starfiles/" + "testpy.py", false);
-    print("loadRawModule = $Result");
-
-		dynamic python = await Service.importRawContext("python", "", false, "");
-    print("python = "+ await python.getString());
-
-		StarObjectClass retobj = await python.call("tt", ["hello ", "world"]);
-    print(await retobj[0]);
-    print(await retobj[1]);
-
-    print(await python["g1"]);
-        
-    StarObjectClass yy = await python.call("yy", ["hello ", "world", 123]);
-    print(await yy.call("__len__",[]));
-
-    StarObjectClass multiply = await Service.importRawContext("python", "Multiply", true, "");
-    StarObjectClass multiply_inst = await multiply.newObject(["", "", 33, 44]);
-    print(await multiply_inst.getString());
-
-    print(await multiply_inst.call("multiply", [11, 22]));
-
-    await SrvGroup.clearService();
-		await starcore.moduleExit();
-  }
 ```
+await SrvGroup.initRaw("python39", Service);
+StarObjectClass python = await Service.importRawContext("python", "", false, "");
+```
+
+3.Run python file
+
+```
+await SrvGroup.doFile("python", assetsPath + "/flutter_assets/starfiles/" + "testcallback.py")
+```
+
 
 API Interface:
 --------
