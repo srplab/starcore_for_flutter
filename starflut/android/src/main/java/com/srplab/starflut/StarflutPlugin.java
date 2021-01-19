@@ -99,9 +99,20 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
           FinishFlag = false;
           reentrantLock = new ReentrantLock();
       }
+      
+      public void Lock()
+      {
+      	reentrantLock.lock();
+      }
+      
+      public void UnLock()
+      {
+      	reentrantLock.unlock();
+      }      
+      
       public Object WaitResult()
       {
-          reentrantLock.lock();
+          //reentrantLock.lock();
           while( FinishFlag == false ){
               reentrantLock.unlock();
               try{
@@ -113,7 +124,7 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
               }
               reentrantLock.lock();
           }
-          reentrantLock.unlock();
+          //reentrantLock.unlock();
           return Result;
       }
       public void SetResult(Object result)
@@ -629,7 +640,11 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
         if( starCoreThreadCallDeep != 0 ){
           System.out.println("call starflut function ["+call.method+"] failed, current is in starcore thread process");
         }
-      }    
+      }
+      if( starCoreHandler == null) {
+          result.notImplemented();
+          break;
+      }
       Message message1 = starCoreHandler.obtainMessage();
       message1.what = starcore_ThreadTick_MethodCall;
       message1.obj = new Object[]{call,result};
@@ -732,6 +747,7 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
         final Integer w_tag = get_WaitResultIndex();
         StarFlutWaitResult m_WaitResult = new_WaitResult(w_tag);
 
+        m_WaitResult.Lock();
         starCoreHandlerThread = new Thread(new Runnable(){
           @Override
           public void run() {
@@ -806,6 +822,8 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
         starCoreHandlerThread.start();     
 
         m_WaitResult.WaitResult();
+        m_WaitResult.UnLock();
+        
         remove_WaitResult(w_tag);
 
         Message message1 = starCoreHandler.obtainMessage();
@@ -1042,6 +1060,8 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
                   cP.add(lParam);   
                   cP.add(w_tag);
                   
+                  m_WaitResult.Lock();
+                  
                   Message message1 = mainHandler.obtainMessage();
                   message1.what = starcore_msgCallBack_MessageID;
                   message1.obj = cP;
@@ -1049,6 +1069,8 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
 
                   starcore._SRPUnLock();
                   Object result = m_WaitResult.WaitResult();
+                  m_WaitResult.UnLock();
+                  
                   remove_WaitResult(w_tag);
                   starcore._SRPLock();
                   return result;       
@@ -2719,6 +2741,7 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
                   StarFlutWaitResult m_WaitResult = new_WaitResult(w_tag);
                   cP.add(w_tag);
                  
+                  m_WaitResult.Lock();
                   Message message1 = mainHandler.obtainMessage();
                   message1.what = starobjecrclass_ScriptCallBack_MessageID;
                   message1.obj = cP;
@@ -2726,6 +2749,8 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
 
                   starcore._SRPUnLock();
                   Object result = m_WaitResult.WaitResult();
+                  m_WaitResult.UnLock();
+                  
                   remove_WaitResult(w_tag);
                   starcore._SRPLock();
 

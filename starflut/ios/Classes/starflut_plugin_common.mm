@@ -332,13 +332,15 @@ StarflutMessage *getStarMessage()
 
 /*---*/
 @interface StarCoreWaitResult:NSObject{
-    NSCondition *cond;
+        NSCondition *cond;
 @public NSObject* Result;
 @public NSObject* Tag;
 }
 
 +(StarCoreWaitResult*)initStarCoreWaitResult;
 -(void)dealloc;
+-(void)Lock;
+-(void)UnLock;
 -(NSObject*)WaitResult;
 -(void)SetResult:(NSObject*)result;
 @end
@@ -357,11 +359,21 @@ StarflutMessage *getStarMessage()
 
 }
 
--(NSObject*)WaitResult
+-(void)Lock
 {
     [cond lock];
-    [cond wait];
+}
+
+-(void)UnLock
+{
     [cond unlock];
+}
+
+-(NSObject*)WaitResult
+{
+    //[cond lock];
+    [cond wait];
+    //[cond unlock];
     return Result;
 }
 -(void)SetResult:(NSObject*)result
@@ -434,6 +446,7 @@ static VS_UWORD SRPAPI GlobalMsgCallBack(VS_ULONG ServiceGroupID, VS_ULONG uMsg,
             [cP addObject:[NSString stringWithUTF8String:(char *)wParam]];
             [cP addObject:[NSNumber numberWithLongLong:lParam]];
             [cP addObject:[NSNumber numberWithInt:w_tag]];
+            [m_WaitResult Lock];
             dispatch_async(dispatch_get_main_queue(), ^{
                 /*
                 - Parameters:
@@ -486,6 +499,7 @@ static VS_UWORD SRPAPI GlobalMsgCallBack(VS_ULONG ServiceGroupID, VS_ULONG uMsg,
             SRPControlInterface->SRPUnLock();
             //id result = [m_WaitResult WaitResult];
             [m_WaitResult WaitResult];
+            [m_WaitResult UnLock];
             remove_WaitResult(w_tag);
             SRPControlInterface->SRPLock();
             return 0;
@@ -1416,6 +1430,7 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
     [cP addObject:out];
     [cP addObject:[NSNumber numberWithInt:w_tag]];
 
+    [m_WaitResult Lock];
     dispatch_async(dispatch_get_main_queue(), ^{
         /*
          - Parameters:
@@ -1454,6 +1469,7 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
     });
     SRPControlInterface->SRPUnLock();
     id RetValue = [m_WaitResult WaitResult];
+    [m_WaitResult UnLock];
     remove_WaitResult(w_tag);
     SRPControlInterface->SRPLock();
     l_Service -> SetRetCode(Object,VSRCALL_OK);

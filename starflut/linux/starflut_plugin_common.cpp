@@ -459,9 +459,26 @@ StarCoreWaitResult::~StarCoreWaitResult()
     vs_cond_destroy(&cond);
 }
 
+static void vs_cond_wait_local( VS_COND *cond)
+{
+#if( VS_OS_TYPE == VS_OS_WINDOWS )
+	WaitForSingleObject((*cond),INFINITE);
+	ResetEvent((*cond));
+	return;
+#endif
+#if( VS_OS_TYPE == VS_OS_WP || VS_OS_TYPE == VS_OS_WINRT || VS_OS_TYPE == VS_OS_WIN10 )
+	WaitForSingleObjectEx((*cond),INFINITE,VS_FALSE);
+	ResetEvent((*cond));
+	return;
+#endif
+#if( VS_OS_TYPE == VS_OS_LINUX || VS_OS_TYPE == VS_OS_ANDROID || VS_OS_TYPE == VS_OS_ANDROIDV7A || VS_OS_TYPE == VS_OS_ANDROIDX86 || VS_OS_TYPE == VS_OS_IOS || VS_OS_TYPE == VS_OS_MACOS )
+	pthread_cond_wait(&cond ->cond,&cond ->mutex);
+#endif
+}
+
 FlValue* StarCoreWaitResult::WaitResult()
 {
-    vs_cond_wait(&cond);
+    vs_cond_wait_local(&cond);
     FlValue* Ret_Result = Result;
     Result = NULL;
     return Ret_Result;
@@ -470,7 +487,9 @@ FlValue* StarCoreWaitResult::WaitResult()
 void StarCoreWaitResult::SetResult(FlValue* result)
 {
     Result = result;
+    vs_mutex_lock(&cond.mutex);
     vs_cond_signal(&cond);
+    vs_mutex_unlock(&cond.mutex);
 }
 
 
@@ -579,11 +598,15 @@ static VS_UWORD SRPAPI GlobalMsgCallBack(VS_ULONG ServiceGroupID, VS_ULONG uMsg,
         /*--need run in main thread*/
         struct StructOfGlobalMsgCallBack_TimerHandlerArgs *Args = g_new0(struct StructOfGlobalMsgCallBack_TimerHandlerArgs,1);
         Args->call_arg = cP;
+        vs_mutex_lock(&m_WaitResult->cond.mutex);
         g_timeout_add(0,(GSourceFunc) GlobalMsgCallBack_RESULT_Handler,(gpointer)Args);   
         SRPControlInterface->SRPUnLock();
         //id result = [m_WaitResult WaitResult];
-        m_WaitResult->WaitResult();
+        FlValue* result_wait = m_WaitResult->WaitResult();
+        vs_mutex_unlock(&m_WaitResult->cond.mutex);
         remove_WaitResult(w_tag);
+        if( result_wait != NULL)
+          fl_value_unref(result_wait);
         SRPControlInterface->SRPLock();
         return 0;       
     }
@@ -695,10 +718,13 @@ static VS_INT32 SRPObject_ScriptCallBack(void* L)
     /*--need run in main thread*/
     struct StructOfScriptCallBack_TimerHandlerArgs *Args = g_new0(struct StructOfScriptCallBack_TimerHandlerArgs,1);
     Args->call_arg = cP;
+
+    vs_mutex_lock(&m_WaitResult->cond.mutex);
     g_timeout_add(0,(GSourceFunc) ScriptCallBack_RESULT_Handler,(gpointer)Args);   
 
     SRPControlInterface->SRPUnLock();
     FlValue *RetValue = m_WaitResult->WaitResult();
+    vs_mutex_unlock(&m_WaitResult->cond.mutex);
     remove_WaitResult(w_tag);
     SRPControlInterface->SRPLock();
 
@@ -1939,6 +1965,7 @@ static VS_ULONG VSTHREADAPI Core_Timer_Thread(struct StructOfCoreThreadArgs* met
 
 static void getExePath(char *ModuleName,int Size)
 {
+	vs_memset(ModuleName,0,Size);
   readlink( "/proc/self/exe", ModuleName, Size );
 }
 
@@ -2318,6 +2345,7 @@ void starflut_plugin_common_handle_method_call_direct(
    StarCoreWaitResult *WaitResult = new StarCoreWaitResult();
    Call_Args->WaitResult = WaitResult;
    Call_Args->method_call = method_call;
+   vs_mutex_lock(&WaitResult->cond.mutex);
 #else
    Call_Args->method_call = method_call;
    g_object_ref((GObject *)method_call);  /*hold the referencce*/
@@ -2325,6 +2353,7 @@ void starflut_plugin_common_handle_method_call_direct(
    hCoreThreadHandle = vs_thread_create((vs_thread_routineproc)Core_Thread, (void *)Call_Args, &hCoreThreadId);
 #if defined(WAITFORCALLRESULT)     
    FlValue *result = WaitResult->WaitResult();
+   vs_mutex_unlock(&WaitResult->cond.mutex);
    delete WaitResult;
    FlMethodSuccessResponse* res = fl_method_success_response_new(result);
    fl_value_unref(result);

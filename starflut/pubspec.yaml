@@ -1,6 +1,6 @@
 name: starflut
 description: A new flutter plugin project,which supports flutter to interact with other scripting languages such as python, java, ruby, golang, rust, etc. It is easy to use, supports android, ios, and desktop
-version: 0.9.0
+version: 0.9.1
 homepage: https://github.com/srplab/starcore_for_flutter
 
 environment:

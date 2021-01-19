@@ -13,9 +13,13 @@ starflut is based on "starcore-for-android" and "starfore-for-ios project".
 
 > Starflut:
   >>[getPlatform](#)          : static Future<int> getPlatform() async, note:return value : starflut.ANDROID, IOS, WINDOWS, LINUX, MACOS, WEB
+  
   >>[setEnv](#)               : static Future<bool> setEnv(String Name,String Value) async,note: android does not support this
+  
   >>[getEnv](#)               : static Future<String> getEnv(String Name) async,note: android does not support this
+  
   >>[loadLibrary](#)          : static Future<bool> loadLibrary(String name) async,load sharelibrarynote: ios does not support this
+  
   >>[copyFileFromAssetsEx](#) : static Future<bool> copyFileFromAssetsEx(String name,String srcRelatePath,String desRelatePath,bool OverwriteIfExist) async
 
 > StarCoreFactory:
@@ -23,7 +27,9 @@ starflut is based on "starcore-for-android" and "starfore-for-ios project".
 
 > StarObject:
   >>[active](#)    : Future<bool> active () async
+  
   >>[deActive](#)  : Future<void> deActive () async
+  
   >>[isActive](#)  : Future<bool> isActive () async
 
 ## 0.6.0 version  2019/08/01
@@ -33,14 +39,17 @@ starflut is based on "starcore-for-android" and "starfore-for-ios project".
 * Newly added API Interface:
 > StarServiceClass:
   >> [allObject](#)            : Future<List> allObject() async 
+  
   >> [restfulCall](#)          : Future<List> restfulCall (String url, String opCode, String jsonString) async
 
 > StarParaPkg:
   >> [equals](#)               : Future<bool> equals (StarParaPkgClass srcParaPkg) async
+  
   >> [v](#)                    : Future<String> get ValueStr async
 
 > StarObject :
   >> [instNumber](#)           : Future<int> instNumber () async
+  
   >> [jsonCall](#)             : Future<String> jsonCall (String jsonString) async
 
 ## First release at 2018/07/22
@@ -58,11 +67,11 @@ For help getting started with Flutter, view offical site
 
 - a. ** download "starcore_for_android" **
 
-[srplab：starcore_for_android.3.5.0.zip](https://github.com/srplab/starcore_for_android/raw/master/starcore_for_android.3.5.0.zip).
+[srplab：starcore_for_android.3.7.5.zip](https://github.com/srplab/starcore_for_android/raw/master/starcore_for_android.3.5.0.zip).
 
 - b. ** download "starcore_for_ios" **
 
-[srplab：starcore_for_ios.3.5.0.tar.gz](https://github.com/srplab/starcore_for_ios/raw/master/starcore_for_ios.3.5.0.tar.gz).
+[srplab：starcore_for_ios.3.7.5.tar.gz](https://github.com/srplab/starcore_for_ios/raw/master/starcore_for_ios.3.5.0.tar.gz).
 
 
 ### 2. How to use, with an example of calling python
