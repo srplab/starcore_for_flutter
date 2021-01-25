@@ -4,6 +4,12 @@ A new flutter plugin project, which supports flutter to interact with other scri
 
 starflut is based on "starcore-for-android" and "starfore-for-ios project". 
 
+## 0.9.5 version  2021/01/25
+
+* add functions for StarBinBufClass : setOffset, print, asString
+* enable call starflut functions in callback
+
+
 ## 0.9.0 version  2021/01/13
 
 * support ios, android, and desktop( windows, linux, macos )
