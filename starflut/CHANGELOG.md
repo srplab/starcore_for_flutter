@@ -6,3 +6,13 @@
 
 * add support for macos,windows,linux
 * add more interface functions.
+
+## 0.9.1
+
+* setShareLibraryPath need not be called on linux
+* fix deadlock problem of linux/ios/macos
+
+## 0.9.5
+
+* add functions for StarBinBufClass : setOffset, print, asString
+* enable call starflut functions in callback

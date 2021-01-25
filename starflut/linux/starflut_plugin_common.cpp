@@ -166,6 +166,9 @@ static VS_INT8 ObjectCreate_AttachBuf[64*1024];
 #define StarBinBufClass_free 608
 #define StarBinBufClass_dispose 609
 #define StarBinBufClass_releaseOwner 610
+#define StarBinBufClass_setOffset 611
+#define StarBinBufClass_print 612
+#define StarBinBufClass_asString 613
 
 #define StarObjectClass_toString 700
 #define StarObjectClass_get 701
@@ -392,12 +395,111 @@ struct StarflutMessage{
   FlMethodCall *call;
   struct StarCoreWaitResult* WaitResult;
 };
-static GAsyncQueue *StarflutMessageQueue = NULL;
+
+/*--add 0.9.5--*/
+#define MAX_STARTHREAD_NUMBER 8
+
+struct StructOfStarThreadWorker {
+    VS_THREADID ThreadID;
+    VS_COND ThreadExitCond;
+    VS_BOOL IsBusy;
+
+    GAsyncQueue* StarflutMessageQueue;
+};
+
+static struct StructOfStarThreadWorker* StarThreadWorker[MAX_STARTHREAD_NUMBER];  /*the index 0 is main thread, and will create at init stage*/
+static VS_MUTEX StarThreadWorkerSyncObject;
+
+static VS_BOOL CreateStarThreadWorker(VS_THREADID ThreadID)  /*failed if max number */
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] == NULL) {
+            struct StructOfStarThreadWorker* Worker = g_new0(StructOfStarThreadWorker, 1);
+            Worker->IsBusy = VS_FALSE;
+            Worker->ThreadID = ThreadID;
+            vs_cond_init(&Worker->ThreadExitCond);
+            Worker->StarflutMessageQueue = g_async_queue_new();
+            StarThreadWorker[i] = Worker;
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return VS_TRUE;
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return VS_FALSE;
+}
+
+static VS_BOOL CanCreateStarThreadWorker()
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] == NULL) {
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return VS_TRUE;
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return VS_FALSE;
+}
+
+static struct StructOfStarThreadWorker* GetStarThreadWorker()  /*get idle worker*/
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] != NULL && StarThreadWorker[i]->IsBusy == VS_FALSE) {
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return StarThreadWorker[i];
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return NULL;
+}
+
+static struct StructOfStarThreadWorker* GetStarThreadWorkerCurrent()  /*get idle worker*/
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    VS_THREADID ThreadID = vs_thread_currentid();
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] != NULL && StarThreadWorker[i]->ThreadID == ThreadID) {
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return StarThreadWorker[i];
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return NULL;
+}
+
+static void SetStarThreadWorkerBusy(VS_THREADID ThreadID, VS_BOOL BusyFlag)
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] != NULL && StarThreadWorker[i]->ThreadID == ThreadID) {
+            StarThreadWorker[i]->IsBusy = BusyFlag;
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return;
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return;
+}
+
+static void SetStarThreadWorkerBusy(VS_BOOL BusyFlag)
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    VS_THREADID ThreadID = vs_thread_currentid();
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] != NULL && StarThreadWorker[i]->ThreadID == ThreadID) {
+            StarThreadWorker[i]->IsBusy = BusyFlag;
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return;
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return;
+}
 
 static StarflutMessage* initStarflutMessage(VS_UINT16 messageID, FlMethodCall *call)
 {
-    if( StarflutMessageQueue == NULL)
-        StarflutMessageQueue = g_async_queue_new ();
     StarflutMessage *obj = (StarflutMessage *)g_new0(StarflutMessage,1);
     obj->MsgClass = messageID;
     obj->call = call;
@@ -406,28 +508,24 @@ static StarflutMessage* initStarflutMessage(VS_UINT16 messageID, FlMethodCall *c
 
 static StarflutMessage* initStarflutMessage(VS_UINT16 messageID)
 {
-    if( StarflutMessageQueue == NULL)
-        StarflutMessageQueue = g_async_queue_new ();
     StarflutMessage *obj = (StarflutMessage *)g_new0(StarflutMessage,1);
     obj->MsgClass = messageID;
     obj->call = NULL;
     return obj;
 }
 
-static void sendStarMessage(StarflutMessage *message)
+static void sendStarMessage(struct StructOfStarThreadWorker* Worker, StarflutMessage *message)
 {
-    g_async_queue_lock (StarflutMessageQueue);
-    g_async_queue_push_unlocked (StarflutMessageQueue, message);
-    g_async_queue_unlock (StarflutMessageQueue);
+    g_async_queue_lock (Worker->StarflutMessageQueue);
+    g_async_queue_push_unlocked (Worker->StarflutMessageQueue, message);
+    g_async_queue_unlock (Worker->StarflutMessageQueue);
 }
 
-static StarflutMessage *getStarMessage()
+static StarflutMessage *getStarMessage(struct StructOfStarThreadWorker* Worker)
 {
-    if( StarflutMessageQueue == NULL)
-        StarflutMessageQueue = g_async_queue_new ();
-    g_async_queue_lock (StarflutMessageQueue);
-    StarflutMessage *obj =(StarflutMessage *)g_async_queue_pop_unlocked (StarflutMessageQueue);
-    g_async_queue_unlock (StarflutMessageQueue);
+    g_async_queue_lock (Worker->StarflutMessageQueue);
+    StarflutMessage *obj =(StarflutMessage *)g_async_queue_pop_unlocked (Worker->StarflutMessageQueue);
+    g_async_queue_unlock (Worker->StarflutMessageQueue);
     return obj;
 }
 
@@ -534,7 +632,7 @@ void remove_WaitResult(int Index)
 static void Starflut_SRPDispatchRequestCallBack(VS_UWORD Para)
 {
     StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_MessageID);
-    sendStarMessage(message);
+    sendStarMessage(StarThreadWorker[0], message);
 }
 
 
@@ -579,6 +677,7 @@ static gboolean GlobalMsgCallBack_RESULT_Handler(struct StructOfGlobalMsgCallBac
 
 static VS_UWORD SRPAPI GlobalMsgCallBack(VS_ULONG ServiceGroupID, VS_ULONG uMsg, VS_UWORD wParam, VS_UWORD lParam, VS_BOOL* IsProcessed, VS_UWORD Para)
 {
+    SetStarThreadWorkerBusy(VS_TRUE);
     VS_CHAR *Info = (VS_CHAR *)wParam;
     switch (uMsg) {
     case MSG_VSDISPMSG:
@@ -608,10 +707,11 @@ static VS_UWORD SRPAPI GlobalMsgCallBack(VS_ULONG ServiceGroupID, VS_ULONG uMsg,
         if( result_wait != NULL)
           fl_value_unref(result_wait);
         SRPControlInterface->SRPLock();
+        SetStarThreadWorkerBusy(VS_FALSE);
         return 0;       
     }
-    return 0;
     default:
+        SetStarThreadWorkerBusy(VS_FALSE);
         return 0;
     }
 }
@@ -662,6 +762,7 @@ static gboolean ScriptCallBack_RESULT_Handler(struct StructOfScriptCallBack_Time
 
 static VS_INT32 SRPObject_ScriptCallBack(void* L)
 {
+    SetStarThreadWorkerBusy(VS_TRUE);
     //VS_ULONG ServiceGroupID = SRPControlInterface ->LuaGetInt( L, SRPControlInterface->LuaUpValueIndex(L, 1) );
     VS_CHAR* ScriptName = SRPInterface->LuaToString(SRPInterface->LuaUpValueIndex(3));
     void* Object = SRPInterface->LuaToObject(1);
@@ -672,6 +773,7 @@ static VS_INT32 SRPObject_ScriptCallBack(void* L)
     //---create parameter
     if (l_Service->LuaGetTop() == 0) {
         l_Service->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "Call Object[%s] FlutterFunction [%s] Error Parameter Number ", l_Service->GetName(Object), ScriptName);
+        SetStarThreadWorkerBusy(VS_FALSE);
         return 0;
     }
     VS_INT32 n = SRPInterface->LuaGetTop() - 1;
@@ -688,6 +790,7 @@ static VS_INT32 SRPObject_ScriptCallBack(void* L)
         if (LuaToFlutterResult == VS_FALSE) {
             l_Service->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "Call Object[%s] JavaFunction [%s] Error,Parameter[%d] failed ", l_Service->GetName(Object), ScriptName, i);
             fl_value_unref(out);
+            SetStarThreadWorkerBusy(VS_FALSE);
             return 0;
         }
     }
@@ -699,6 +802,7 @@ static VS_INT32 SRPObject_ScriptCallBack(void* L)
 
     VS_UUID ObjectID;
     l_Service->GetID(Object, &ObjectID);
+    l_Service->AddRefEx(Object);
     VS_CHAR CleObjectID[CleObjectID_LENGTH];
 
     VS_UUID ObjectID_Temp;
@@ -730,12 +834,14 @@ static VS_INT32 SRPObject_ScriptCallBack(void* L)
 
     l_Service->SetRetCode(Object, VSRCALL_OK);
     if (RetValue == NULL) {
+        SetStarThreadWorkerBusy(VS_FALSE);
         return 0;
     }
     else {
         n = l_Service->LuaGetTop();
         FlutterObjectToLua(l_Service, RetValue);
         fl_value_unref(RetValue);
+        SetStarThreadWorkerBusy(VS_FALSE);
         return l_Service->LuaGetTop() - n;
     }
 }
@@ -1897,6 +2003,9 @@ void starflut_plugin_common_init(FlMethodChannel* in_channel)
     g_WaitResultMap_Index = 1;
     g_WaitResultMap = NULL;
 
+    memset(StarThreadWorker, 0, sizeof(StarThreadWorker));
+    vs_mutex_init(&StarThreadWorkerSyncObject);
+
     channel = in_channel;
 }
 
@@ -1949,8 +2058,12 @@ static VS_ULONG VSTHREADAPI Core_Timer_Thread(struct StructOfCoreThreadArgs* met
         vs_mutex_lock(&mutexObject);
         if (ExitAppFlag == true) {
             vs_mutex_unlock(&mutexObject);
-            StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_Exit);
-            sendStarMessage(message);
+            for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+                if (StarThreadWorker[i] != NULL) {
+                    StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_Exit);
+                    sendStarMessage(StarThreadWorker[i], message);
+                }
+            }
             /*--need not wait to exit*/
             //vs_thread_join(hCoreThreadHandle);
             break;
@@ -1958,7 +2071,7 @@ static VS_ULONG VSTHREADAPI Core_Timer_Thread(struct StructOfCoreThreadArgs* met
         vs_mutex_unlock(&mutexObject);
         vs_thread_sleep(10);
         StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_MessageID);
-        sendStarMessage(message);
+        sendStarMessage(StarThreadWorker[0], message);
     }
     return 0;
 }
@@ -2142,7 +2255,10 @@ static VS_ULONG VSTHREADAPI Core_Thread(struct StructOfCoreThreadArgs *Call_Args
       BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_write",(VS_INT8 *)StarBinBufClass_write);      
       BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_free",(VS_INT8 *)StarBinBufClass_free);      
       BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_dispose",(VS_INT8 *)StarBinBufClass_dispose);      
-      BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_releaseOwner",(VS_INT8 *)StarBinBufClass_releaseOwner);      
+      BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_releaseOwner",(VS_INT8 *)StarBinBufClass_releaseOwner);
+      BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_setOffset",(VS_INT8 *)StarBinBufClass_setOffset);
+      BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_print",(VS_INT8 *)StarBinBufClass_print);
+      BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_asString",(VS_INT8 *)StarBinBufClass_asString);
 
       BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarObjectClass_toString",(VS_INT8 *)StarObjectClass_toString);      
       BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarObjectClass_get",(VS_INT8 *)StarObjectClass_get);      
@@ -2186,12 +2302,16 @@ static VS_ULONG VSTHREADAPI Core_Thread(struct StructOfCoreThreadArgs *Call_Args
 
       SRPControlInterface->SRPUnLock();
 
+      VS_THREADID hThreadIDTemp = vs_thread_currentid();
+      CreateStarThreadWorker(hThreadIDTemp);
+      struct StructOfStarThreadWorker* ThreadWorker = GetStarThreadWorkerCurrent();
+
       /*--create timer thread--*/
       hCoreTimerThreadHandle = vs_thread_create((vs_thread_routineproc)Core_Timer_Thread, (void*)NULL, &hCoreTimerThreadId);
 
       /*--enter loop*/
       while (true) {
-          StarflutMessage* message = getStarMessage();
+          StarflutMessage* message = getStarMessage(ThreadWorker);
           switch (message->MsgClass) {
           case starcore_ThreadTick_MessageID:
           {
@@ -2204,6 +2324,7 @@ static VS_ULONG VSTHREADAPI Core_Thread(struct StructOfCoreThreadArgs *Call_Args
           break;
           case starcore_ThreadTick_MethodCall:
           {
+              SetStarThreadWorkerBusy(VS_TRUE);
               vs_mutex_lock(&starCoreThreadCallDeepSyncObject);
               starCoreThreadCallDeep++;
               vs_mutex_unlock(&starCoreThreadCallDeepSyncObject);
@@ -2225,10 +2346,14 @@ static VS_ULONG VSTHREADAPI Core_Thread(struct StructOfCoreThreadArgs *Call_Args
               Return_Args->method_call = message->call;
               g_timeout_add(0, (GSourceFunc)MainThread_MESSAGE_RESULT_Handler, (gpointer)Return_Args);
 #endif
+              SetStarThreadWorkerBusy(VS_FALSE);
           }
           break;
           case starcore_ThreadTick_Exit:
           {
+              vs_mutex_lock(&ThreadWorker->ThreadExitCond.mutex);
+              vs_cond_signal(&ThreadWorker->ThreadExitCond);
+              vs_mutex_unlock(&ThreadWorker->ThreadExitCond.mutex);
               g_free(message);
               free(Call_Args);
               return 0;
@@ -2379,6 +2504,57 @@ void starflut_plugin_common_handle_method_call_direct(
   fl_method_call_respond(method_call, response, nullptr); 
 }
 
+static VS_ULONG VSTHREADAPI Core_Worker_Thread(void* Call_Args)
+{
+    struct StructOfStarThreadWorker* ThreadWorker = GetStarThreadWorkerCurrent();
+
+    /*--enter loop*/
+    while (true) {
+        StarflutMessage* message = getStarMessage(ThreadWorker);
+        switch (message->MsgClass) {
+        case starcore_ThreadTick_MethodCall:
+        {
+            SetStarThreadWorkerBusy(VS_TRUE);
+            vs_mutex_lock(&starCoreThreadCallDeepSyncObject);
+            starCoreThreadCallDeep++;
+            vs_mutex_unlock(&starCoreThreadCallDeepSyncObject);
+            SRPControlInterface->SRPLock();
+            const VS_CHAR* method = fl_method_call_get_name(message->call);
+            FlValue* result_value_do = handleMethodCall_Do(message->call);
+            if (strcmp(method, "starcore_moduleExit") != 0)
+                SRPControlInterface->SRPUnLock();
+            vs_mutex_lock(&starCoreThreadCallDeepSyncObject);
+            starCoreThreadCallDeep--;
+            vs_mutex_unlock(&starCoreThreadCallDeepSyncObject);
+
+#if defined(WAITFORCALLRESULT)   
+            message->WaitResult->SetResult(result_value_do);
+#else   
+            /*--need send response in main thread--*/
+            struct StructOfMainThreadTimerHandlerArgs* Return_Args = (struct StructOfMainThreadTimerHandlerArgs*)malloc(sizeof(struct StructOfMainThreadTimerHandlerArgs));
+            Return_Args->result = result_value_do;
+            Return_Args->method_call = message->call;
+            g_timeout_add(0, (GSourceFunc)MainThread_MESSAGE_RESULT_Handler, (gpointer)Return_Args);
+#endif
+            SetStarThreadWorkerBusy(VS_FALSE);
+        }
+        break;
+        case starcore_ThreadTick_Exit:
+        {
+            SRPControlInterface->DetachCurrentThread();
+            vs_mutex_lock(&ThreadWorker->ThreadExitCond.mutex);
+            vs_cond_signal(&ThreadWorker->ThreadExitCond);
+            vs_mutex_unlock(&ThreadWorker->ThreadExitCond.mutex);
+            free(message);
+            return 0;
+        }
+        }
+        free(message);
+    }
+    return 0;
+}
+
+
 void starflut_plugin_common_handle_method_call(
     FlPluginRegistrar* registrar,
     FlMethodChannel* channel,
@@ -2390,17 +2566,14 @@ void starflut_plugin_common_handle_method_call(
       strcmp(method, "starcore_loadLibrary") == 0 || strcmp(method, "starcore_setEnv") == 0 || strcmp(method, "starcore_getEnv") == 0 || strcmp(method, "starcore_typeCheck") == 0 ) {
       starflut_plugin_common_handle_method_call_direct(registrar,channel,method,method_call);
   } else {
+      /* in some case, for thread switching, starCoreThreadCallDeep may be not 0, so remove it */
+      /*
       vs_mutex_lock(&starCoreThreadCallDeepSyncObject);
       if (starCoreThreadCallDeep != 0) {
-          vs_mutex_unlock(&starCoreThreadCallDeepSyncObject);
-          VS_CHAR LocalBuf[512];
-          sprintf(LocalBuf,"call starflut function [%s] failed, current is in starcore thread process", method);
-          g_autoptr(FlMethodResponse) response = nullptr;
-          response = FL_METHOD_RESPONSE(fl_method_error_response_new(0,LocalBuf,nullptr));
-          fl_method_call_respond(method_call, response, nullptr); 
-          return;
+          printf("call starflut function [%s]  may be error, current is in starcore thread process", method);
       }
       vs_mutex_unlock(&starCoreThreadCallDeepSyncObject);
+      */
 #if defined(WAITFORCALLRESULT)  
       g_autoptr(FlMethodResponse) response = nullptr;
       g_autoptr(FlValue) result_value = handleMethodCall_Do( method_call);
@@ -2413,9 +2586,34 @@ void starflut_plugin_common_handle_method_call(
       }
       fl_method_call_respond(method_call, response, nullptr); `
 #else
-      g_object_ref((GObject *)method_call);  /*hold the referencce*/
-      StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_MethodCall,method_call);
-      sendStarMessage(message);
+      if (strcmp(method, "starcore_moduleExit") == 0 || strcmp(method, "starcore_moduleClear") == 0) {
+          g_object_ref((GObject*)method_call);  /*hold the referencce*/
+          StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_MethodCall, method_call);
+          sendStarMessage(StarThreadWorker[0], message);
+      }
+      else {
+          struct StructOfStarThreadWorker* ThreadWorker = GetStarThreadWorker();
+          if (ThreadWorker != NULL) {
+              g_object_ref((GObject*)method_call);  /*hold the referencce*/
+              StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_MethodCall, method_call);
+              sendStarMessage(ThreadWorker, message);
+          }
+          else if (CanCreateStarThreadWorker() == VS_TRUE) {
+              /*--create a new worker*/
+              VS_THREADID hCoreWorkerThreadId;
+              vs_thread_create((vs_thread_routineproc)Core_Worker_Thread, (void*)NULL, &hCoreWorkerThreadId);
+              CreateStarThreadWorker(hCoreWorkerThreadId);
+
+              struct StructOfStarThreadWorker* ThreadWorker_Local = GetStarThreadWorker();
+              g_object_ref((GObject*)method_call);  /*hold the referencce*/
+              StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_MethodCall, method_call);
+              sendStarMessage(ThreadWorker_Local, message);
+          }
+          else {
+              g_autoptr(FlValue) result = fl_value_new_null();
+              fl_method_call_respond_error(method_call, "-1", "Can not create worker thread", result, NULL);
+          }
+      }
       return;
 #endif    
   }  
@@ -2708,9 +2906,25 @@ static FlValue* handleMethodCall_Do(FlMethodCall* method_call)
     case starcore_moduleExit :
     {
         if (ModuleInitFlag == VS_TRUE) {
+            for (VS_INT32 i = 1; i < MAX_STARTHREAD_NUMBER; i++) {
+                if (StarThreadWorker[i] != NULL) {
+                    vs_mutex_lock(&StarThreadWorker[i]->ThreadExitCond.mutex);
+                }
+            }
             vs_mutex_lock(&mutexObject);
             ExitAppFlag = true;
             vs_mutex_unlock(&mutexObject);
+            for (VS_INT32 i = 1; i < MAX_STARTHREAD_NUMBER; i++) {
+                if (StarThreadWorker[i] != NULL) {
+                    vs_cond_wait_local(&StarThreadWorker[i]->ThreadExitCond);
+                }
+            }
+
+            for (VS_INT32 i = 1; i < MAX_STARTHREAD_NUMBER; i++) {
+                if (StarThreadWorker[i] != NULL) {
+                    vs_mutex_unlock(&StarThreadWorker[i]->ThreadExitCond.mutex);
+                }
+            }
             /*--need not wait to exit*/
             //vs_thread_join(hCoreTimerThreadHandle);
             removeFromObjectMap(NULL);
@@ -4250,6 +4464,59 @@ static FlValue* handleMethodCall_Do(FlMethodCall* method_call)
         BasicSRPInterface->DelStringKey(CleObjectMap, toString(fl_value_get_list_value(plist,0)));
         l_BinBuf->ReleaseOwner();
         return NULL;
+    }
+    case StarBinBufClass_setOffset:
+    {
+        FlValue* plist = fl_method_call_get_args(method_call);
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(fl_value_get_list_value(plist,0))));
+        if (l_BinBuf == NULL) {
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(fl_value_get_list_value(plist,0)));
+            return fromBool(VS_FALSE);
+        }
+        VS_INT32 Offset = toInt32(fl_value_get_list_value(plist,1));
+        if( Offset < 0 )
+            Offset = 0;
+        VS_BOOL Result = l_BinBuf -> SetOffset((VS_UINT32)Offset);
+        return fromBool(Result);
+    }
+    case StarBinBufClass_print:
+    {
+        FlValue* plist = fl_method_call_get_args(method_call);
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(fl_value_get_list_value(plist,0))));
+        if (l_BinBuf == NULL) {
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(fl_value_get_list_value(plist,0)));
+            return NULL;
+        }
+        VS_CHAR *Arg = toString(fl_value_get_list_value(plist,1));
+        l_BinBuf->Print(0,"%s",Arg);
+        return NULL;
+    }
+
+    case StarBinBufClass_asString:
+    {
+        FlValue* plist = fl_method_call_get_args(method_call);
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(fl_value_get_list_value(plist,0))));
+        if (l_BinBuf == NULL) {
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(fl_value_get_list_value(plist,0)));
+            return fromString("");
+        }
+        VS_INT32 Length = l_BinBuf -> GetOffset();
+        if( Length == 0 ){
+            return fromString("");
+        }else{
+            VS_CHAR LocalBuf[10240+1];
+            VS_CHAR *StringBufPtr;
+            if( Length >= 10240 )
+                StringBufPtr = (VS_CHAR *)BasicSRPInterface -> Malloc(Length + 1);
+            else
+                StringBufPtr = ObjectCreate_AttachBuf;
+            vs_memcpy( StringBufPtr, l_BinBuf->GetBuf(), Length );
+            StringBufPtr[Length] = 0;
+            FlValue* RetValue = fromString(StringBufPtr );
+            if( Length >= 10240 )
+                BasicSRPInterface -> Free(StringBufPtr);
+			return RetValue;
+		}
     }
     /*-----------------------------------------------*/
     case StarObjectClass_toString:

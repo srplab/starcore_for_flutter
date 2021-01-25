@@ -36,6 +36,7 @@ static std::shared_ptr<flutter::MethodChannel<flutter::EncodableValue>> channel;
 static class ClassOfSRPControlInterface *SRPControlInterface = NULL;
 static class ClassOfBasicSRPInterface *BasicSRPInterface = NULL; /*--add to dict, do not call release--*/
 static class ClassOfSRPInterface *SRPInterface = NULL; /*---add to dict, should call release--*/
+static class ClassOfCoreShellInterface* SRPCoreShellInterface = NULL;
 
 const char StarCorePrefix[] =     "@s_s_c";
 const char StarSrvGroupPrefix[] = "@s_s_g";  /*--with group index: not supported */
@@ -181,6 +182,9 @@ static VS_INT8 ObjectCreate_AttachBuf[64*1024];
 #define StarBinBufClass_free 608
 #define StarBinBufClass_dispose 609
 #define StarBinBufClass_releaseOwner 610
+#define StarBinBufClass_setOffset 611
+#define StarBinBufClass_print 612
+#define StarBinBufClass_asString 613
 
 #define StarObjectClass_toString 700
 #define StarObjectClass_get 701
@@ -313,19 +317,54 @@ static VS_BOOL IsMap(const flutter::EncodableValue* Value)
 }
 
 /*--the returned value must be free--*/
-static VS_CHAR *toString(const flutter::EncodableValue *val)
+class ClassOfStarFlutAnsiString {
+public:
+    VS_CHAR* AnsiCharPtr;
+public:
+    ClassOfStarFlutAnsiString(VS_CHAR* UTF8CharPtr, VS_INT32 Length, VS_INT32* ResultLength);
+    ~ClassOfStarFlutAnsiString();
+};
+
+ClassOfStarFlutAnsiString::ClassOfStarFlutAnsiString(VS_CHAR* UTF8CharPtr,VS_INT32 Length,VS_INT32 * ResultLength)
+{
+    if (UTF8CharPtr == NULL) {
+        (*ResultLength) = 0;
+        AnsiCharPtr = NULL;
+    }
+    else
+        AnsiCharPtr = SRPCoreShellInterface->UTF8ToAnsiEx(UTF8CharPtr, Length, ResultLength);
+}
+
+ClassOfStarFlutAnsiString::~ClassOfStarFlutAnsiString()
+{
+    if(AnsiCharPtr != NULL)
+        SRPCoreShellInterface->FreeBuf(AnsiCharPtr);
+}
+
+static ClassOfStarFlutAnsiString toString(const flutter::EncodableValue *val)
 {
     if( val == NULL || std::holds_alternative<std::string>(*val) == false)
-        return NULL;
-    return (VS_CHAR *)std::get_if<std::string>(val)->c_str();
+        return ClassOfStarFlutAnsiString(NULL,-1,NULL);
+    return ClassOfStarFlutAnsiString((VS_CHAR*)std::get_if<std::string>(val)->c_str(), -1,NULL);
+}
+
+static ClassOfStarFlutAnsiString toStringEx(const flutter::EncodableValue* val,VS_INT32 *ResultLength)
+{
+    if (val == NULL || std::holds_alternative<std::string>(*val) == false)
+        return ClassOfStarFlutAnsiString(NULL, -1,NULL);
+    return ClassOfStarFlutAnsiString((VS_CHAR*)std::get_if<std::string>(val)->c_str(), (VS_INT32)std::get_if<std::string>(val)->length(), ResultLength);
 }
 
 static EncodableValue* fromString(VS_CHAR *val)
 {
     if( val == NULL )
         return new EncodableValue("");
+    VS_CHAR *UTF8CharPtr = SRPCoreShellInterface->AnsiToUTF8Ex(val, -1, NULL);
+    if (UTF8CharPtr == NULL)
+        return new EncodableValue("");
     std::string string_val;
-    string_val.assign(val);
+    string_val.assign(UTF8CharPtr);
+    SRPCoreShellInterface->FreeBuf(UTF8CharPtr);
     return new EncodableValue(string_val);
 }
 
@@ -333,8 +372,13 @@ static EncodableValue* fromStringEx(VS_CHAR* val,VS_INT32 val_Len)
 {
     if (val == NULL)
         return new EncodableValue("");
+    VS_INT32 ResultLength;
+    VS_CHAR* UTF8CharPtr = SRPCoreShellInterface->AnsiToUTF8Ex(val, val_Len, &ResultLength);
+    if (UTF8CharPtr == NULL)
+        return new EncodableValue("");
     std::string string_val;
-    string_val.assign(val, val_Len);
+    string_val.assign(UTF8CharPtr, ResultLength);
+    SRPCoreShellInterface->FreeBuf(UTF8CharPtr);
     return new EncodableValue(string_val);
 }
 
@@ -425,12 +469,112 @@ struct StarflutMessage{
   struct StarCoreWaitResult* WaitResult;
 };
 
+/*--add 0.9.5--*/
+#define MAX_STARTHREAD_NUMBER 8
+
 #include <queue>
 #include <mutex>
 
-static std::queue<struct StarflutMessage*> StarflutMessageQueue;
-static std::mutex StarflutMessage_QueueMutex;
-static std::condition_variable StarflutMessage_Cond;
+struct StructOfStarThreadWorker {
+    VS_THREADID ThreadID;
+    VS_COND ThreadExitCond;
+    VS_BOOL IsBusy;
+
+    std::queue<struct StarflutMessage*> StarflutMessageQueue;
+    std::mutex StarflutMessage_QueueMutex;
+    std::condition_variable StarflutMessage_Cond;
+};
+
+static struct StructOfStarThreadWorker *StarThreadWorker[MAX_STARTHREAD_NUMBER];  /*the index 0 is main thread, and will create at init stage*/
+static VS_MUTEX StarThreadWorkerSyncObject;
+
+static VS_BOOL CreateStarThreadWorker(VS_THREADID ThreadID)  /*failed if max number */
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] == NULL) {
+            struct StructOfStarThreadWorker* Worker = new StructOfStarThreadWorker(); // (struct StructOfStarThreadWorker*)malloc(sizeof(struct StructOfStarThreadWorker));
+            Worker->IsBusy = VS_FALSE;
+            Worker->ThreadID = ThreadID;
+            vs_cond_init(&Worker->ThreadExitCond);
+            StarThreadWorker[i] = Worker;
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return VS_TRUE;
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return VS_FALSE;
+}
+
+static VS_BOOL CanCreateStarThreadWorker()
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] == NULL) {
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return VS_TRUE;
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return VS_FALSE;
+}
+
+static struct StructOfStarThreadWorker* GetStarThreadWorker()  /*get idle worker*/
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] != NULL && StarThreadWorker[i]->IsBusy == VS_FALSE ) {
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return StarThreadWorker[i];
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return NULL;
+}
+
+static struct StructOfStarThreadWorker* GetStarThreadWorkerCurrent()  /*get idle worker*/
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    VS_THREADID ThreadID = vs_thread_currentid();
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] != NULL && StarThreadWorker[i]->ThreadID == ThreadID) {
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return StarThreadWorker[i];
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return NULL;
+}
+
+static void SetStarThreadWorkerBusy(VS_THREADID ThreadID, VS_BOOL BusyFlag)
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] != NULL && StarThreadWorker[i]->ThreadID == ThreadID) {
+            StarThreadWorker[i]->IsBusy = BusyFlag;
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return;
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return;
+}
+
+static void SetStarThreadWorkerBusy(VS_BOOL BusyFlag)
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    VS_THREADID ThreadID = vs_thread_currentid();
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] != NULL && StarThreadWorker[i]->ThreadID == ThreadID) {
+            StarThreadWorker[i]->IsBusy = BusyFlag;
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return;
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return;
+}
+
 
 static StarflutMessage* initStarflutMessage(VS_UINT16 messageID, const flutter::MethodCall<flutter::EncodableValue> *call,flutter::MethodResult<flutter::EncodableValue> *result)
 {
@@ -452,29 +596,31 @@ static StarflutMessage* initStarflutMessage(VS_UINT16 messageID)
     return obj;
 }
 
-static void sendStarMessage(StarflutMessage *message)
+static void sendStarMessage(struct StructOfStarThreadWorker *Worker,StarflutMessage *message)
 {
-    std::unique_lock<std::mutex> lock(StarflutMessage_QueueMutex);
-    StarflutMessageQueue.push(message);
-    StarflutMessage_Cond.notify_one();
+    std::unique_lock<std::mutex> lock(Worker->StarflutMessage_QueueMutex);
+    Worker->StarflutMessageQueue.push(message);
+    Worker->StarflutMessage_Cond.notify_one();
 }
 
-static StarflutMessage *getStarMessage()
+static StarflutMessage *getStarMessage(struct StructOfStarThreadWorker* Worker)
 {
     StarflutMessage *Message = NULL;
-    std::unique_lock<std::mutex> lock(StarflutMessage_QueueMutex);
-    while (StarflutMessageQueue.empty())
+    std::unique_lock<std::mutex> lock(Worker->StarflutMessage_QueueMutex);
+    while (Worker->StarflutMessageQueue.empty())
     {
-        StarflutMessage_Cond.wait_for(lock, std::chrono::seconds(1));
+        Worker->StarflutMessage_Cond.wait_for(lock, std::chrono::seconds(1));
     }
 
-    if (!StarflutMessageQueue.empty())
+    if (!Worker->StarflutMessageQueue.empty())
     {
-        Message = StarflutMessageQueue.front();
-        StarflutMessageQueue.pop();
+        Message = Worker->StarflutMessageQueue.front();
+        Worker->StarflutMessageQueue.pop();
     }
     return Message;
 }
+
+
 
 /*-------------*/
 struct StarCoreWaitResult{
@@ -559,11 +705,12 @@ void remove_WaitResult(int Index)
 static void Starflut_SRPDispatchRequestCallBack(VS_UWORD Para)
 {
     StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_MessageID);
-    sendStarMessage(message);
+    sendStarMessage(StarThreadWorker[0],message);
 }
 
 static VS_UWORD SRPAPI GlobalMsgCallBack(VS_ULONG ServiceGroupID, VS_ULONG uMsg, VS_UWORD wParam, VS_UWORD lParam, VS_BOOL* IsProcessed, VS_UWORD Para)
 {
+    SetStarThreadWorkerBusy(VS_TRUE);
     switch (uMsg) {
     case MSG_VSDISPMSG:
     case MSG_VSDISPLUAMSG:
@@ -598,9 +745,11 @@ static VS_UWORD SRPAPI GlobalMsgCallBack(VS_ULONG ServiceGroupID, VS_ULONG uMsg,
         m_WaitResult->WaitResult();
         remove_WaitResult(w_tag);
         SRPControlInterface->SRPLock();
+        SetStarThreadWorkerBusy(VS_FALSE);
         return 0;
     }
     default:
+        SetStarThreadWorkerBusy(VS_FALSE);
         return 0;
     }
 }
@@ -610,6 +759,7 @@ static VS_BOOL FlutterObjectToLua(class ClassOfSRPInterface* In_SRPInterface, co
 
 static VS_INT32 SRPObject_ScriptCallBack(void* L)
 {
+    SetStarThreadWorkerBusy(VS_TRUE);
     //VS_ULONG ServiceGroupID = SRPControlInterface ->LuaGetInt( L, SRPControlInterface->LuaUpValueIndex(L, 1) );
     VS_CHAR* ScriptName = SRPInterface->LuaToString(SRPInterface->LuaUpValueIndex(3));
     void* Object = SRPInterface->LuaToObject(1);
@@ -620,6 +770,7 @@ static VS_INT32 SRPObject_ScriptCallBack(void* L)
     //---create parameter
     if (l_Service->LuaGetTop() == 0) {
         l_Service->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "Call Object[%s] FlutterFunction [%s] Error Parameter Number ", l_Service->GetName(Object), ScriptName);
+        SetStarThreadWorkerBusy(VS_FALSE);
         return 0;
     }
     VS_INT32 n = SRPInterface->LuaGetTop() - 1;
@@ -637,6 +788,7 @@ static VS_INT32 SRPObject_ScriptCallBack(void* L)
         }
         if (LuaToFlutterResult == VS_FALSE) {
             l_Service->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "Call Object[%s] JavaFunction [%s] Error,Parameter[%d] failed ", l_Service->GetName(Object), ScriptName, i);
+            SetStarThreadWorkerBusy(VS_FALSE);
             return 0;
         }
     }
@@ -648,6 +800,7 @@ static VS_INT32 SRPObject_ScriptCallBack(void* L)
 
     VS_UUID ObjectID;
     l_Service->GetID(Object, &ObjectID);
+    l_Service->AddRefEx(Object);
     VS_CHAR CleObjectID[CleObjectID_LENGTH];
 
     VS_UUID ObjectID_Temp;
@@ -683,12 +836,14 @@ static VS_INT32 SRPObject_ScriptCallBack(void* L)
 
     l_Service->SetRetCode(Object, VSRCALL_OK);
     if (RetValue == NULL) {
+        SetStarThreadWorkerBusy(VS_FALSE);
         return 0;
     }
     else {
         n = l_Service->LuaGetTop();
         FlutterObjectToLua(l_Service, RetValue);
         delete RetValue;
+        SetStarThreadWorkerBusy(VS_FALSE);
         return l_Service->LuaGetTop() - n;
     }
 }
@@ -805,15 +960,15 @@ static VS_BOOL StartsWithString(VS_CHAR* str1, const VS_CHAR* str2)
 
 static VS_BOOL StartsWithString(const flutter::EncodableValue* in_str1, const VS_CHAR* str2)
 {
-    VS_CHAR* str1 = toString(in_str1);
+    ClassOfStarFlutAnsiString str1 = toString(in_str1);
     size_t Str1Length;
     size_t Str2Length;
 
-    Str1Length = vs_string_strlen(str1);
+    Str1Length = vs_string_strlen(str1.AnsiCharPtr);
     Str2Length = vs_string_strlen(str2);
     if (Str1Length < Str2Length)
         return VS_FALSE;
-    if (vs_string_strnicmp(str1, str2, Str2Length) == 0)
+    if (vs_string_strnicmp(str1.AnsiCharPtr, str2, Str2Length) == 0)
         return VS_TRUE;
     return VS_FALSE;
 }
@@ -846,33 +1001,33 @@ static VS_BOOL StarParaPkg_FromTuple_Sub(const flutter::EncodableList * tuple, V
             ParaPkg->InsertFloat(Index, toDouble(valueobj));
         }
         else if (IsString(valueobj) == VS_TRUE) {
-            VS_CHAR* str = toString(valueobj);
-            if (StartsWithString(str, (VS_CHAR *)StarBinBufPrefix)) {
-                class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)BasicSRPInterface->FindStringKey(CleObjectMap, str);
+            ClassOfStarFlutAnsiString str = toString(valueobj);
+            if (StartsWithString(str.AnsiCharPtr, (VS_CHAR *)StarBinBufPrefix)) {
+                class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)BasicSRPInterface->FindStringKey(CleObjectMap, str.AnsiCharPtr);
                 if (l_BinBuf == NULL) {
-                    SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", str);
+                    SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", str.AnsiCharPtr);
                     return VS_FALSE;
                 }
                 ParaPkg->InsertBinEx(Index, l_BinBuf->GetBuf(), l_BinBuf->GetOffset(), l_BinBuf->IsFromRaw());
             }
-            else if (StartsWithString(str, (VS_CHAR*)StarParaPkgPrefix)) {
-                class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)BasicSRPInterface->FindStringKey(CleObjectMap, str);
+            else if (StartsWithString(str.AnsiCharPtr, (VS_CHAR*)StarParaPkgPrefix)) {
+                class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)BasicSRPInterface->FindStringKey(CleObjectMap, str.AnsiCharPtr);
                 if (l_ParaPkg == NULL) {
-                    SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", str);
+                    SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", str.AnsiCharPtr);
                     return VS_FALSE;
                 }
                 ParaPkg->InsertParaPackage(Index, l_ParaPkg);
             }
-            else if (StartsWithString(str, (VS_CHAR*)StarObjectPrefix)) {
-                void* SRPObject = (void*)BasicSRPInterface->FindStringKey(CleObjectMap, str);
+            else if (StartsWithString(str.AnsiCharPtr, (VS_CHAR*)StarObjectPrefix)) {
+                void* SRPObject = (void*)BasicSRPInterface->FindStringKey(CleObjectMap, str.AnsiCharPtr);
                 if (SRPObject == NULL) {
-                    SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starobject object[%s] can not be found..", str);
+                    SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starobject object[%s] can not be found..", str.AnsiCharPtr);
                     return VS_FALSE;
                 }
                 ParaPkg->InsertObject(Index, SRPObject);
             }
             else
-                ParaPkg->InsertStr(Index, str);
+                ParaPkg->InsertStr(Index, str.AnsiCharPtr);
         }
         else if (IsList(valueobj) == VS_TRUE) {
             class ClassOfSRPParaPackageInterface* l_ParaPkg = BasicSRPInterface->GetParaPkgInterface();
@@ -1181,7 +1336,6 @@ static flutter::EncodableValue *SRPObject_AttributeToFlutterObject(VS_ATTRIBUTEI
 
 static VS_BOOL SRPObject_FlutterObjectToAttribute(class ClassOfSRPInterface* In_SRPInterface, VS_UINT8 AttributeType, VS_INT32 AttributeLength, VS_UUID* StructID, const flutter::EncodableValue *ObjectTemp, VS_ULONG BufOffset, VS_UINT8* Buf)
 {
-    VS_CHAR* CharValue;
     void* AtomicStruct;
     VS_ATTRIBUTEINFO AttributeInfo;
 
@@ -1299,11 +1453,13 @@ static VS_BOOL SRPObject_FlutterObjectToAttribute(class ClassOfSRPInterface* In_
             return VS_FALSE;
 
     case VSTYPE_VSTRING:
-        CharValue = toString(ObjectTemp);
-        if (CharValue == NULL)
+    {
+        ClassOfStarFlutAnsiString l_CharValue = toString(ObjectTemp);
+        if (l_CharValue.AnsiCharPtr == NULL)
             return VS_FALSE;
-        strcpy((char*)&Buf[BufOffset], CharValue);
+        strcpy((char*)&Buf[BufOffset], l_CharValue.AnsiCharPtr);
         return VS_TRUE;
+    }
 
     case VSTYPE_STRUCT:
         if (ObjectTemp == NULL || IsList(ObjectTemp) == VS_FALSE)
@@ -1347,20 +1503,24 @@ static VS_BOOL SRPObject_FlutterObjectToAttribute(class ClassOfSRPInterface* In_
         return VS_FALSE;
 
     case VSTYPE_CHAR:
-        CharValue = toString(ObjectTemp);
-        if (CharValue == NULL)
+    {
+        ClassOfStarFlutAnsiString l_CharValue = toString(ObjectTemp);
+        if (l_CharValue.AnsiCharPtr == NULL)
             return VS_FALSE;
-        strncpy((char*)&Buf[BufOffset], CharValue, AttributeLength);
+        strncpy((char*)&Buf[BufOffset], l_CharValue.AnsiCharPtr, AttributeLength);
         ((VS_CHAR*)&Buf[BufOffset])[AttributeLength - 1] = 0;
         return VS_TRUE;
+    }
 
     case VSTYPE_UUID:
     case VSTYPE_STATICID:
-        CharValue = toString(ObjectTemp);
-        if (CharValue == NULL)
+    {
+        ClassOfStarFlutAnsiString l_CharValue = toString(ObjectTemp);
+        if (l_CharValue.AnsiCharPtr == NULL)
             return VS_FALSE;
-        In_SRPInterface->StringToUuid(CharValue, (VS_UUID*)&Buf[BufOffset]);
+        In_SRPInterface->StringToUuid(l_CharValue.AnsiCharPtr, (VS_UUID*)&Buf[BufOffset]);
         return VS_TRUE;
+    }
 
     default:
         return VS_FALSE;
@@ -1603,37 +1763,43 @@ static VS_BOOL FlutterObjectToLua(class ClassOfSRPInterface* In_SRPInterface, co
         In_SRPInterface->LuaPushNumber(toDouble(valueobj));
         return VS_TRUE;
     } else if (IsString(valueobj) == VS_TRUE) {
-        VS_CHAR* str = toString(valueobj);
-        if (StartsWithString(str, StarBinBufPrefix)) {
-            class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)BasicSRPInterface->FindStringKey(CleObjectMap, str);
+        ClassOfStarFlutAnsiString str = toString(valueobj);
+        if (StartsWithString(str.AnsiCharPtr, StarBinBufPrefix)) {
+            class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)BasicSRPInterface->FindStringKey(CleObjectMap, str.AnsiCharPtr);
             if (l_BinBuf == NULL) {
-                SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", str);
+                SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", str.AnsiCharPtr);
                 return VS_FALSE;
             }
             In_SRPInterface->LuaPushBinBuf(l_BinBuf, VS_FALSE);
             return VS_TRUE;
         }
-        else if (StartsWithString(str, StarParaPkgPrefix)) {
-            class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)BasicSRPInterface->FindStringKey(CleObjectMap, str);
+        else if (StartsWithString(str.AnsiCharPtr, StarParaPkgPrefix)) {
+            class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)BasicSRPInterface->FindStringKey(CleObjectMap, str.AnsiCharPtr);
             if (l_ParaPkg == NULL) {
-                SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", str);
+                SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", str.AnsiCharPtr);
                 return VS_FALSE;
             }
             In_SRPInterface->LuaPushParaPkg(l_ParaPkg, VS_FALSE);
             return VS_TRUE;
         }
-        else if (StartsWithString(str, StarObjectPrefix)) {
-            void* SRPObject = (void*)BasicSRPInterface->FindStringKey(CleObjectMap, str);
+        else if (StartsWithString(str.AnsiCharPtr, StarObjectPrefix)) {
+            void* SRPObject = (void*)BasicSRPInterface->FindStringKey(CleObjectMap, str.AnsiCharPtr);
             if (SRPObject == NULL) {
-                SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starobject object[%s] can not be found..", str);
+                SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starobject object[%s] can not be found..", str.AnsiCharPtr);
                 return VS_FALSE;
             }
             In_SRPInterface->LuaPushObject(SRPObject);
             return VS_TRUE;
         }
         else {
-            const std::string *sss = std::get_if<std::string>(valueobj);
-            In_SRPInterface->LuaPushLString(sss->c_str(), (VS_ULONG)sss->length());
+            //const std::string *sss = std::get_if<std::string>(valueobj);
+            //In_SRPInterface->LuaPushLString(sss->c_str(), (VS_ULONG)sss->length());
+            VS_INT32 Local_Length;
+            ClassOfStarFlutAnsiString LocalCharPtr = toStringEx(valueobj, &Local_Length);
+            if(LocalCharPtr.AnsiCharPtr == NULL)
+                In_SRPInterface->LuaPushString("");
+            else
+                In_SRPInterface->LuaPushLString(LocalCharPtr.AnsiCharPtr, (VS_ULONG)Local_Length);
             return VS_TRUE;
         }
     }
@@ -1675,11 +1841,13 @@ static VS_BOOL FlutterObjectToLua(class ClassOfSRPInterface* In_SRPInterface, co
 
 static flutter::EncodableValue *StarObject_getValue(class ClassOfSRPInterface* In_SRPInterface, void* SRPObject, const flutter::EncodableValue* Name)
 {
-    VS_CHAR LocalNameBuf[64];
+    VS_CHAR LocalNameBuf[4096];
     VS_CHAR* ParaName;
 
     if (IsString(Name) ==VS_TRUE) {
-        ParaName = toString(Name);
+        ClassOfStarFlutAnsiString l_ParaName = toString(Name);
+        strcpy(LocalNameBuf, l_ParaName.AnsiCharPtr);
+        ParaName = LocalNameBuf;
     }
     else {
         if (IsInt32(Name) == VS_TRUE || IsInt64(Name) == VS_TRUE) {
@@ -1807,6 +1975,9 @@ void starflut_plugin_common_init(std::shared_ptr<flutter::MethodChannel<flutter:
     g_WaitResultMap_Index = 1;
     g_WaitResultMap = NULL;
 
+    memset(StarThreadWorker, 0, sizeof(StarThreadWorker));
+    vs_mutex_init(&StarThreadWorkerSyncObject);
+
     channel = in_channel;
 }
 
@@ -1874,7 +2045,7 @@ static void MESSAGE_SCRIPTCALL_Success(const flutter::EncodableValue* result)
         t_WaitResult->SetResult(new flutter::EncodableValue(*o));
     }
     else {
-        SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "Object function [%s] can not return value, for it is called in ui thread\n", toString(&(*plist)[1]));
+        SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "Object function [%s] can not return value, for it is called in ui thread\n", toString(&(*plist)[1]).AnsiCharPtr);
     }
 }
 
@@ -2035,8 +2206,12 @@ static VS_ULONG VSTHREADAPI Core_Timer_Thread(struct StructOfCoreThreadArgs* Cal
         vs_mutex_lock(&mutexObject);
         if (ExitAppFlag == true) {
             vs_mutex_unlock(&mutexObject);
-            StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_Exit);
-            sendStarMessage(message);
+            for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+                if (StarThreadWorker[i] != NULL) {
+                    StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_Exit);
+                    sendStarMessage(StarThreadWorker[i], message);
+                }
+            }
             /*--need not wait to exit*/
             //vs_thread_join(hCoreThreadHandle);
             break;
@@ -2044,7 +2219,7 @@ static VS_ULONG VSTHREADAPI Core_Timer_Thread(struct StructOfCoreThreadArgs* Cal
         vs_mutex_unlock(&mutexObject);
         vs_thread_sleep(10);
         StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_MessageID);
-        sendStarMessage(message);
+        sendStarMessage(StarThreadWorker[0],message);
     }
     return 0;
 }
@@ -2102,6 +2277,8 @@ static VS_ULONG VSTHREADAPI Core_Thread(struct StructOfCoreThreadArgs *Call_Args
    }else{
        SRPControlInterface = (class ClassOfSRPControlInterface*)QueryControlInterfaceProc();
       BasicSRPInterface = SRPControlInterface->QueryBasicInterface(0);
+
+      SRPCoreShellInterface = (class ClassOfCoreShellInterface* )SRPControlInterface->GetCoreShellInterface();
 
       {
           ::GetModuleFileNameA(NULL, ModuleName, 512);
@@ -2227,7 +2404,10 @@ static VS_ULONG VSTHREADAPI Core_Thread(struct StructOfCoreThreadArgs *Call_Args
       BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_write",(VS_INT8 *)StarBinBufClass_write);      
       BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_free",(VS_INT8 *)StarBinBufClass_free);      
       BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_dispose",(VS_INT8 *)StarBinBufClass_dispose);      
-      BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_releaseOwner",(VS_INT8 *)StarBinBufClass_releaseOwner);      
+      BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_releaseOwner",(VS_INT8 *)StarBinBufClass_releaseOwner);
+      BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_setOffset",(VS_INT8 *)StarBinBufClass_setOffset);
+      BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_print",(VS_INT8 *)StarBinBufClass_print);
+      BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarBinBufClass_asString",(VS_INT8 *)StarBinBufClass_asString);
 
       BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarObjectClass_toString",(VS_INT8 *)StarObjectClass_toString);      
       BasicSRPInterface->InsertStringKey(starcoreCmdMap,(VS_CHAR *)"StarObjectClass_get",(VS_INT8 *)StarObjectClass_get);      
@@ -2278,12 +2458,16 @@ static VS_ULONG VSTHREADAPI Core_Thread(struct StructOfCoreThreadArgs *Call_Args
 
       SRPControlInterface->SRPUnLock();
 
+      VS_THREADID hThreadIDTemp = vs_thread_currentid();
+      CreateStarThreadWorker(hThreadIDTemp);
+      struct StructOfStarThreadWorker* ThreadWorker = GetStarThreadWorkerCurrent();
+
       /*--create timer thread--*/
       hCoreTimerThreadHandle = vs_thread_create((vs_thread_routineproc)Core_Timer_Thread, (void*)NULL, &hCoreTimerThreadId);
 
       /*--enter loop*/
       while (true) {
-          StarflutMessage* message = getStarMessage();
+          StarflutMessage* message = getStarMessage(ThreadWorker);
           switch (message->MsgClass) {
           case starcore_ThreadTick_MessageID:
           {
@@ -2296,6 +2480,7 @@ static VS_ULONG VSTHREADAPI Core_Thread(struct StructOfCoreThreadArgs *Call_Args
           break;
           case starcore_ThreadTick_MethodCall:
           {
+              SetStarThreadWorkerBusy(VS_TRUE);
               vs_mutex_lock(&starCoreThreadCallDeepSyncObject);
               starCoreThreadCallDeep++;
               vs_mutex_unlock(&starCoreThreadCallDeepSyncObject);
@@ -2319,10 +2504,12 @@ static VS_ULONG VSTHREADAPI Core_Thread(struct StructOfCoreThreadArgs *Call_Args
 #endif
               ::PostMessage(hMainWnd, MAINTHEAD_WND_MESSAGE_RESULT, 0, (LPARAM)Return_Args);
 #endif
+              SetStarThreadWorkerBusy(VS_FALSE);
           }
           break;
           case starcore_ThreadTick_Exit:
           {
+              vs_cond_signal(&ThreadWorker->ThreadExitCond);
               free(message);
               free(Call_Args);
               return 0;
@@ -2376,7 +2563,7 @@ void starflut_plugin_common_handle_method_call_direct(
                 ResultValue.push_back(*value);
                 delete value;
             }else if (IsString(&(*plist)[i]) == VS_TRUE) {
-                EncodableValue* value = fromString(toString(&(*plist)[i]));
+                EncodableValue* value = fromString(toString(&(*plist)[i]).AnsiCharPtr);
                 ResultValue.push_back(*value);
                 delete value;
             }
@@ -2469,6 +2656,57 @@ void starflut_plugin_common_handle_method_call_direct(
   }
 }
 
+static VS_ULONG VSTHREADAPI Core_Worker_Thread(void* Call_Args)
+{
+    struct StructOfStarThreadWorker* ThreadWorker = GetStarThreadWorkerCurrent();
+
+    /*--enter loop*/
+    while (true) {
+        StarflutMessage* message = getStarMessage(ThreadWorker);
+        switch (message->MsgClass) {
+        case starcore_ThreadTick_MethodCall:
+        {
+            SetStarThreadWorkerBusy(VS_TRUE);
+            vs_mutex_lock(&starCoreThreadCallDeepSyncObject);
+            starCoreThreadCallDeep++;
+            vs_mutex_unlock(&starCoreThreadCallDeepSyncObject);
+            SRPControlInterface->SRPLock();
+            flutter::EncodableValue* result_value_do = handleMethodCall_Do(message->method, &message->arguments);
+            if (message->method.compare("starcore_moduleExit") != 0)
+                SRPControlInterface->SRPUnLock();
+            vs_mutex_lock(&starCoreThreadCallDeepSyncObject);
+            starCoreThreadCallDeep--;
+            vs_mutex_unlock(&starCoreThreadCallDeepSyncObject);
+
+#if defined(WAITFORCALLRESULT)   
+            message->WaitResult->SetResult(result_value_do);
+#else   
+            /*--need send response in main thread--*/
+            struct StructOfMainThreadTimerHandlerArgs* Return_Args = (struct StructOfMainThreadTimerHandlerArgs*)malloc(sizeof(struct StructOfMainThreadTimerHandlerArgs));
+            Return_Args->result = message->result;
+            Return_Args->value = result_value_do;
+#if defined(ENV_LINUX)
+            g_timeout_add(0, (GSourceFunc)MainThread_Timer_Handler, (gpointer)Return_Args);
+#endif
+            ::PostMessage(hMainWnd, MAINTHEAD_WND_MESSAGE_RESULT, 0, (LPARAM)Return_Args);
+#endif
+            SetStarThreadWorkerBusy(VS_FALSE);
+        }
+        break;
+        case starcore_ThreadTick_Exit:
+        {
+            SRPControlInterface->DetachCurrentThread();
+            vs_cond_signal(&ThreadWorker->ThreadExitCond);
+            free(message);
+            return 0;
+        }
+        }
+        free(message);
+    }
+    return 0;
+}
+
+
 #if defined(ENV_LINUX)
 void starflut_plugin_common_handle_method_call(
     FlPluginRegistrar* registrar,
@@ -2497,15 +2735,14 @@ void starflut_plugin_common_handle_method_call(const flutter::MethodCall<flutter
         starflut_plugin_common_handle_method_call_direct(method_call, std::move(result));
     }
     else {
+       /* in some case, for thread switching, starCoreThreadCallDeep may be not 0, so remove it */
+       /*
       vs_mutex_lock(&starCoreThreadCallDeepSyncObject);
       if (starCoreThreadCallDeep != 0) {
-          vs_mutex_unlock(&starCoreThreadCallDeepSyncObject);
-          VS_CHAR LocalBuf[512];
-          sprintf(LocalBuf,"call starflut function [%s] failed, current is in starcore thread process", method.c_str());
-          result->Error(0, LocalBuf);
-          return;
+          printf("call starflut function [%s] may be error, current is in starcore thread process", method.c_str());
       }
       vs_mutex_unlock(&starCoreThreadCallDeepSyncObject);
+      */
 #if defined(WAITFORCALLRESULT)  
       flutter::EncodableValue* result_value = handleMethodCall_Do(method, method_call.arguments());
       if (result_value == NULL) {
@@ -2516,8 +2753,30 @@ void starflut_plugin_common_handle_method_call(const flutter::MethodCall<flutter
           delete result_value;
       }
 #else
-      StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_MethodCall, (flutter::MethodCall<flutter::EncodableValue> *) & method_call, result.release());
-      sendStarMessage(message);
+      if (method.compare("starcore_moduleExit") == 0 || method.compare("starcore_moduleClear") == 0) {
+          StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_MethodCall, (flutter::MethodCall<flutter::EncodableValue> *) & method_call, result.release());
+          sendStarMessage(StarThreadWorker[0], message);
+      }
+      else {
+          struct StructOfStarThreadWorker* ThreadWorker = GetStarThreadWorker();
+          if (ThreadWorker != NULL) {
+              StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_MethodCall, (flutter::MethodCall<flutter::EncodableValue> *) & method_call, result.release());
+              sendStarMessage(ThreadWorker, message);
+          }
+          else if (CanCreateStarThreadWorker() == VS_TRUE) {
+              /*--create a new worker*/
+              VS_THREADID hCoreWorkerThreadId;
+              vs_thread_create((vs_thread_routineproc)Core_Worker_Thread, (void*)NULL, &hCoreWorkerThreadId);
+              CreateStarThreadWorker(hCoreWorkerThreadId);
+
+              struct StructOfStarThreadWorker* ThreadWorker_Local = GetStarThreadWorker();
+              StarflutMessage* message = initStarflutMessage(starcore_ThreadTick_MethodCall, (flutter::MethodCall<flutter::EncodableValue> *) & method_call, result.release());
+              sendStarMessage(ThreadWorker_Local, message);
+          }
+          else {
+              result->Error("-1", "Can not create worker thread");
+          }
+      }
       return;
 #endif
     }
@@ -2740,12 +2999,12 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
                 }
             }
             else if (IsString(ServiceName_GroupID) == VS_TRUE) {
-                VS_CHAR* ServiceName, * ActiveServiceName;
+                VS_CHAR * ActiveServiceName;
                 VS_UUID ServiceID;
                 VS_ULONG ServiceGroupID;
 
                 SRPControlInterface->SRPLock();
-                ServiceName = toString(ServiceName_GroupID);
+                ClassOfStarFlutAnsiString ServiceName = toString(ServiceName_GroupID);
                 ServiceGroupID = SRPControlInterface->QueryFirstServiceGroup();
                 class ClassOfBasicSRPInterface* l_BasicSRPInterface = NULL;
                 while (ServiceGroupID != VS_INVALID_SERVICEGROUPID) {
@@ -2755,7 +3014,7 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
                         return NULL;
                     }
                     ActiveServiceName = l_BasicSRPInterface->QueryActiveService(&ServiceID);
-                    if (ActiveServiceName != NULL && vs_string_strcmp(ActiveServiceName, ServiceName) == 0)
+                    if (ActiveServiceName != NULL && vs_string_strcmp(ActiveServiceName, ServiceName.AnsiCharPtr) == 0)
                         break;
                     l_BasicSRPInterface->Release();
                     ServiceGroupID = SRPControlInterface->QueryNextServiceGroup();
@@ -2811,6 +3070,11 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
             vs_mutex_lock(&mutexObject);
             ExitAppFlag = true;
             vs_mutex_unlock(&mutexObject);
+            for (VS_INT32 i = 1; i < MAX_STARTHREAD_NUMBER; i++) {
+                if (StarThreadWorker[i] != NULL) {
+                    vs_cond_wait(&StarThreadWorker[i]->ThreadExitCond);
+                }
+            }
             /*--need not wait to exit*/
             //vs_thread_join(hCoreTimerThreadHandle);
             removeFromObjectMap(NULL);
@@ -2864,7 +3128,7 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case starcore_setRegisterCode:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        VS_BOOL Result = SRPControlInterface->SetRegisterCode(toString(&(*plist)[0]), toBool(&(*plist)[1]));
+        VS_BOOL Result = SRPControlInterface->SetRegisterCode(toString(&(*plist)[0]).AnsiCharPtr, toBool(&(*plist)[1]));
         return fromBool(Result);
     }
     case starcore_isRegistered:
@@ -2874,7 +3138,7 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     }
     case starcore_setLocale:
     {
-        SRPControlInterface->SetLocale(toString(arguments));
+        SRPControlInterface->SetLocale(toString(arguments).AnsiCharPtr);
         return fromBool(VS_TRUE);
     }
     case starcore_getLocale:
@@ -2898,13 +3162,13 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     }
     case starcore_getScriptIndex:
     {
-        VS_INT32 Index = SRPControlInterface->GetScriptInterfaceIndex(toString(arguments));
+        VS_INT32 Index = SRPControlInterface->GetScriptInterfaceIndex(toString(arguments).AnsiCharPtr);
         return fromInt32(Index);
     }
     case starcore_setScript:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        VS_BOOL Result = SRPControlInterface->SetScriptInterface(toString(&(*plist)[0]), toString(&(*plist)[1]), toString(&(*plist)[2]));
+        VS_BOOL Result = SRPControlInterface->SetScriptInterface(toString(&(*plist)[0]).AnsiCharPtr, toString(&(*plist)[1]).AnsiCharPtr, toString(&(*plist)[2]).AnsiCharPtr);
         return fromBool(Result);
     }
     case starcore_detachCurrentThread:
@@ -2928,16 +3192,16 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     }
     case starcore_setShareLibraryPath:
     {
-        SRPControlInterface->SetShareLibraryPath(toString(arguments));
+        SRPControlInterface->SetShareLibraryPath(toString(arguments).AnsiCharPtr);
         return NULL;
     }
     /*-----------------------------------------------*/
     case StarSrvGroupClass_toString:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap,toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap,toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromString("");
         }
         if (l_SrvGroup->QueryActiveService(NULL) == NULL) {
@@ -2950,24 +3214,24 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_createService:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         VS_UUID ObjectID;
-        VS_CHAR* ServiceID = toString(&(*plist)[10]);
-        if (ServiceID != NULL)
-            l_SrvGroup->StringToUuid(ServiceID, &ObjectID);
+        ClassOfStarFlutAnsiString ServiceID = toString(&(*plist)[10]);
+        if (ServiceID.AnsiCharPtr != NULL)
+            l_SrvGroup->StringToUuid(ServiceID.AnsiCharPtr, &ObjectID);
         else {
             INIT_UUID(ObjectID);
         }
-        VS_BOOL Result = l_SrvGroup->CreateService(toString(&(*plist)[1]), toString(&(*plist)[2]), &ObjectID, toString(&(*plist)[3]), toInt32(&(*plist)[4]), toInt32(&(*plist)[5]), toInt32(&(*plist)[6]), toInt32(&(*plist)[7]), toInt32(&(*plist)[8]), toInt32(&(*plist)[9]));
+        VS_BOOL Result = l_SrvGroup->CreateService(toString(&(*plist)[1]).AnsiCharPtr, toString(&(*plist)[2]).AnsiCharPtr, &ObjectID, toString(&(*plist)[3]).AnsiCharPtr, toInt32(&(*plist)[4]), toInt32(&(*plist)[5]), toInt32(&(*plist)[6]), toInt32(&(*plist)[7]), toInt32(&(*plist)[8]), toInt32(&(*plist)[9]));
         if (Result == VS_FALSE) {
             return NULL;
         }
         else {
-            class ClassOfSRPInterface* l_SRPInterface = l_SrvGroup->GetSRPInterface(toString(&(*plist)[2]), "root", toString(&(*plist)[3]));
+            class ClassOfSRPInterface* l_SRPInterface = l_SrvGroup->GetSRPInterface(toString(&(*plist)[2]).AnsiCharPtr, "root", toString(&(*plist)[3]).AnsiCharPtr);
             SRPInterface = l_SRPInterface;
 
             /*Star_ObjectCBridge_Init(SRPInterface,NULL,NULL);  for macos, need not call this*/
@@ -2989,16 +3253,16 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_getService:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         VS_UUID ServiceID;
         if (l_SrvGroup->QueryActiveService(&ServiceID) == NULL) {
             return NULL;
         }
-        class ClassOfSRPInterface* l_SRPInterface = l_SrvGroup->GetSRPInterfaceEx(&ServiceID, toString(&(*plist)[1]), toString(&(*plist)[2]));
+        class ClassOfSRPInterface* l_SRPInterface = l_SrvGroup->GetSRPInterfaceEx(&ServiceID, toString(&(*plist)[1]).AnsiCharPtr, toString(&(*plist)[2]).AnsiCharPtr);
         if (l_SRPInterface == NULL)
             return NULL;
 
@@ -3018,9 +3282,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_clearService:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         removeFromObjectMap(NULL);
@@ -3030,9 +3294,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_newParaPkg:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         class ClassOfSRPParaPackageInterface* ParaPkg = l_SrvGroup->GetParaPkgInterface();
@@ -3072,9 +3336,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_newBinBuf:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         class ClassOfSRPBinBufInterface* BinBuf = l_SrvGroup->GetSRPBinBufInterface();
@@ -3090,9 +3354,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_getServicePath:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return  fromString("");
         }
         VS_CHAR LocalBuf[512];
@@ -3102,20 +3366,20 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_setServicePath:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
-        l_SrvGroup->SetDefaultPath(toString(&(*plist)[1]));
+        l_SrvGroup->SetDefaultPath(toString(&(*plist)[1]).AnsiCharPtr);
         return NULL;
     }
     case StarSrvGroupClass_servicePathIsSet:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
         return fromBool(l_SrvGroup->DefaultPathIsSet());
@@ -3123,9 +3387,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_getCurrentPath:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromString("");
         }
         VS_CHAR LocalBuf[512];
@@ -3135,20 +3399,20 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_importService:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        VS_BOOL Result = l_SrvGroup->ImportService(toString(&(*plist)[1]), toBool(&(*plist)[2]));
+        VS_BOOL Result = l_SrvGroup->ImportService(toString(&(*plist)[1]).AnsiCharPtr, toBool(&(*plist)[2]));
         return fromBool(Result);
     }
     case StarSrvGroupClass_clearServiceEx:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         removeFromObjectMap(NULL);
@@ -3158,70 +3422,70 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_runScript:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        VS_CHAR* ScriptBuf = toString(&(*plist)[2]);
-        VS_BOOL RetResult = l_SrvGroup->DoBuffer(toString(&(*plist)[1]), ScriptBuf, (VS_INT32)vs_string_strlen(ScriptBuf), VS_FALSE, toString(&(*plist)[3]));
+        ClassOfStarFlutAnsiString ScriptBuf = toString(&(*plist)[2]);
+        VS_BOOL RetResult = l_SrvGroup->DoBuffer(toString(&(*plist)[1]).AnsiCharPtr, ScriptBuf.AnsiCharPtr, (VS_INT32)vs_string_strlen(ScriptBuf.AnsiCharPtr), VS_FALSE, toString(&(*plist)[3]).AnsiCharPtr);
         return fromBool(RetResult);
     }
     case StarSrvGroupClass_runScriptEx:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[2])));
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[2]).AnsiCharPtr));
         if (l_BinBuf == NULL) {
             SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[2]));
             return fromBool(VS_FALSE);
         }
-        VS_BOOL RetResult = l_SrvGroup->DoBuffer(toString(&(*plist)[1]), l_BinBuf->GetBufPtr(0), l_BinBuf->GetOffset(), VS_FALSE, toString(&(*plist)[3]));
+        VS_BOOL RetResult = l_SrvGroup->DoBuffer(toString(&(*plist)[1]).AnsiCharPtr, l_BinBuf->GetBufPtr(0), l_BinBuf->GetOffset(), VS_FALSE, toString(&(*plist)[3]).AnsiCharPtr);
         return fromBool(RetResult);
     }
     case StarSrvGroupClass_doFile:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        VS_BOOL Result = l_SrvGroup->DoFileEx(toString(&(*plist)[1]), toString(&(*plist)[2]), NULL, NULL, VS_FALSE, NULL);
+        VS_BOOL Result = l_SrvGroup->DoFileEx(toString(&(*plist)[1]).AnsiCharPtr, toString(&(*plist)[2]).AnsiCharPtr, NULL, NULL, VS_FALSE, NULL);
         return fromBool(Result);
     }
     case StarSrvGroupClass_doFileEx:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        VS_BOOL Result = l_SrvGroup->DoFileEx(toString(&(*plist)[1]), toString(&(*plist)[2]), NULL, NULL, VS_FALSE, toString(&(*plist)[3]));
+        VS_BOOL Result = l_SrvGroup->DoFileEx(toString(&(*plist)[1]).AnsiCharPtr, toString(&(*plist)[2]).AnsiCharPtr, NULL, NULL, VS_FALSE, toString(&(*plist)[3]).AnsiCharPtr);
         return fromBool(Result);
     }
     case StarSrvGroupClass_setClientPort:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        VS_BOOL RetResult = l_SrvGroup->SetClientPort(toString(&(*plist)[1]), toInt32(&(*plist)[2]));
+        VS_BOOL RetResult = l_SrvGroup->SetClientPort(toString(&(*plist)[1]).AnsiCharPtr, toInt32(&(*plist)[2]));
         return fromBool(RetResult);
     }
     case StarSrvGroupClass_setTelnetPort:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
         VS_BOOL RetResult = l_SrvGroup->SetTelnetPort(toInt32(&(*plist)[1]));
@@ -3230,58 +3494,58 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_setOutputPort:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        VS_BOOL RetResult = l_SrvGroup->SetOutputPort(toString(&(*plist)[1]), toInt32(&(*plist)[2]));
+        VS_BOOL RetResult = l_SrvGroup->SetOutputPort(toString(&(*plist)[1]).AnsiCharPtr, toInt32(&(*plist)[2]));
         return fromBool(RetResult);
     }
     case StarSrvGroupClass_setWebServerPort:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        VS_BOOL RetResult = l_SrvGroup->SetWebServerPort(toString(&(*plist)[1]), toInt32(&(*plist)[2]), toInt32(&(*plist)[3]), toInt32(&(*plist)[4]));
+        VS_BOOL RetResult = l_SrvGroup->SetWebServerPort(toString(&(*plist)[1]).AnsiCharPtr, toInt32(&(*plist)[2]), toInt32(&(*plist)[3]), toInt32(&(*plist)[4]));
         return fromBool(RetResult);
     }
     case StarSrvGroupClass_initRaw:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[2])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[2]).AnsiCharPtr));
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[2]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[2]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        VS_BOOL Result = l_SrvGroup->InitRaw(toString(&(*plist)[1]), l_Service);
+        VS_BOOL Result = l_SrvGroup->InitRaw(toString(&(*plist)[1]).AnsiCharPtr, l_Service);
         return fromBool(Result);
     }
     case StarSrvGroupClass_loadRawModule:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        VS_BOOL Result = l_SrvGroup->LoadRawModule(toString(&(*plist)[1]), toString(&(*plist)[2]), toString(&(*plist)[3]), toBool(&(*plist)[4]), NULL);
+        VS_BOOL Result = l_SrvGroup->LoadRawModule(toString(&(*plist)[1]).AnsiCharPtr, toString(&(*plist)[2]).AnsiCharPtr, toString(&(*plist)[3]).AnsiCharPtr, toBool(&(*plist)[4]), NULL);
         return fromBool(Result);
     }
     case StarSrvGroupClass_getLastError:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromInt32(0);
         }
         return fromInt32(l_SrvGroup->GetLastError());
@@ -3289,9 +3553,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_getLastErrorInfo:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromString("");
         }
         VS_UINT32 LineIndex;
@@ -3304,9 +3568,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_getCorePath:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromString("");
         }
         return fromString(l_SrvGroup->GetCorePath());
@@ -3314,9 +3578,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_getUserPath:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromString("");
         }
         return fromString(l_SrvGroup->GetUserPath());
@@ -3324,9 +3588,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_getLocalIP:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromString("127.0.0.1");
         }
         return fromString(l_SrvGroup->GetLocalIP());
@@ -3335,9 +3599,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
         EncodableList* Result =new EncodableList();
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             EncodableValue* val = fromString("127.0.0.1");
             Result->push_back(*val);
             delete val;
@@ -3361,9 +3625,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarSrvGroupClass_getObjectNum:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromInt32(0);
         }
         return fromInt32(l_SrvGroup->GetObjectNum());
@@ -3372,9 +3636,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
         EncodableList* Result = new EncodableList();
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             EncodableValue* val = fromBool(VS_FALSE);
             Result->push_back(*val);
             delete val;
@@ -3384,7 +3648,7 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
             return new EncodableValue(*Result);
         }
         VS_BOOL Result_Bool, OnLineScriptFlag;
-        Result_Bool = SRPControlInterface->ActiveScriptInterface(toString(&(*plist)[1]), &OnLineScriptFlag, NULL);
+        Result_Bool = SRPControlInterface->ActiveScriptInterface(toString(&(*plist)[1]).AnsiCharPtr, &OnLineScriptFlag, NULL);
         EncodableValue* val = fromBool(Result_Bool);
         Result->push_back(*val);
         delete val;
@@ -3397,9 +3661,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
         EncodableList* Result = new EncodableList();
-        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfBasicSRPInterface* l_SrvGroup = (class ClassOfBasicSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_SrvGroup == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "starsrvgroup object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             EncodableValue* val = fromBool(VS_FALSE);
             Result->push_back(*val);
             delete val;
@@ -3408,9 +3672,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
             delete val;
             return new EncodableValue(*Result);
         }
-        VS_CHAR* In_ScriptBuf = toString(&(*plist)[2]);
+        ClassOfStarFlutAnsiString In_ScriptBuf = toString(&(*plist)[2]);
         VS_CHAR* ErrorInfo;
-        VS_BOOL Result_Value = l_SrvGroup->PreCompile(toString(&(*plist)[1]), In_ScriptBuf, (VS_INT32)vs_string_strlen(In_ScriptBuf), "", &ErrorInfo);
+        VS_BOOL Result_Value = l_SrvGroup->PreCompile(toString(&(*plist)[1]).AnsiCharPtr, In_ScriptBuf.AnsiCharPtr, (VS_INT32)vs_string_strlen(In_ScriptBuf.AnsiCharPtr), "", &ErrorInfo);
         EncodableValue* val = fromBool(Result_Value);
         Result->push_back(*val);
         delete val;
@@ -3424,9 +3688,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarServiceClass_toString:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromString("");
         }
         if (l_Service->GetServiceName() == NULL) {
@@ -3439,21 +3703,21 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarServiceClass_get:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
-        VS_CHAR* ParaName = toString(&(*plist)[1]);
-        if (vs_string_strcmp(ParaName, "_Name") == 0) {
+        ClassOfStarFlutAnsiString ParaName = toString(&(*plist)[1]);
+        if (vs_string_strcmp(ParaName.AnsiCharPtr, "_Name") == 0) {
             return fromString(l_Service->GetServiceName());
         }
-        else if (vs_string_strcmp(ParaName, "_ID") == 0) {
+        else if (vs_string_strcmp(ParaName.AnsiCharPtr, "_ID") == 0) {
             VS_UUID ServiceID;
             l_Service->GetServiceID(&ServiceID);
             return fromString(l_Service->UuidToString(&ServiceID));
         }
-        else if (vs_string_strcmp(ParaName, "_ServiceGroup") == 0) {
+        else if (vs_string_strcmp(ParaName.AnsiCharPtr, "_ServiceGroup") == 0) {
             class ClassOfBasicSRPInterface* l_BasicSRPInterface = l_Service->GetBasicInterface();
             if (l_BasicSRPInterface->GetServiceGroupID() == 0) {
                 if (BasicSRPInterface == NULL) {
@@ -3491,12 +3755,12 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarServiceClass_getObject:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
-        void* Object = l_Service->GetObjectEx(NULL, toString(&(*plist)[1]));
+        void* Object = l_Service->GetObjectEx(NULL, toString(&(*plist)[1]).AnsiCharPtr);
         if (Object == NULL) {
             return NULL;
         }
@@ -3519,13 +3783,13 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarServiceClass_getObjectEx:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         VS_UUID LocalObjectID;
-        l_Service->StringToUuid(toString(&(*plist)[1]), &LocalObjectID);
+        l_Service->StringToUuid(toString(&(*plist)[1]).AnsiCharPtr, &LocalObjectID);
         void* Object = l_Service->GetObject(&LocalObjectID);
         if (Object == NULL) {
             return NULL;
@@ -3549,9 +3813,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarServiceClass_newObject:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         const flutter::EncodableList* args = std::get_if<flutter::EncodableList>(&(*plist)[1]);
@@ -3561,6 +3825,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
         VS_CHAR* QueueAttrName, * ObjectNameString, * AttributeChangeString;
         void* SRPObject = NULL, * SRPParentObject = NULL;
         const flutter::EncodableValue *ObjectTemp;
+        VS_CHAR QueueAttrNameLocalBuf[256];
+        VS_CHAR AttributeChangeStringLocalBuf[256];
+        VS_CHAR ObjectNameStringLocalBuf[256];
 
         QueueAttrName = NULL;
         SRPParentObject = NULL;
@@ -3573,7 +3840,8 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
         ObjectTemp = SRPObject_GetArrayObject(argc, args, Index);
         if (ObjectTemp != NULL && IsString(ObjectTemp) == VS_TRUE) {
             if (!StartsWithString(ObjectTemp, StarObjectPrefix)) {
-                QueueAttrName = toString(ObjectTemp);
+                VS_STRNCPY(QueueAttrNameLocalBuf, toString(ObjectTemp).AnsiCharPtr, 255);
+                QueueAttrName = QueueAttrNameLocalBuf;
                 Index++;
                 ObjectTemp = SRPObject_GetArrayObject(argc, args, Index);
                 if (ObjectTemp == NULL) {  //no more parameter
@@ -3586,12 +3854,13 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
                         ObjectNameString = QueueAttrName;
                         QueueAttrName = NULL;
                         SRPParentObject = NULL;
-                        AttributeChangeString = toString(ObjectTemp);
+                        VS_STRNCPY(AttributeChangeStringLocalBuf, toString(ObjectTemp).AnsiCharPtr,255)
+                        AttributeChangeString = AttributeChangeStringLocalBuf;
                         Index++;
                         ObjectTemp = NULL;  //end
                     }
                     else {
-                        SRPParentObject = toPointer(l_Service->FindStringKey(CleObjectMap,toString(ObjectTemp)));
+                        SRPParentObject = toPointer(l_Service->FindStringKey(CleObjectMap,toString(ObjectTemp).AnsiCharPtr));
                         Index++;
                         ObjectTemp = SRPObject_GetArrayObject(argc, args, Index);
                     }
@@ -3602,7 +3871,7 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
             }
             else {
                 /*--is starobject--*/
-                SRPParentObject = toPointer(l_Service->FindStringKey(CleObjectMap, toString(ObjectTemp)));
+                SRPParentObject = toPointer(l_Service->FindStringKey(CleObjectMap, toString(ObjectTemp).AnsiCharPtr));
                 Index++;
                 ObjectTemp = SRPObject_GetArrayObject(argc, args, Index);
             }
@@ -3612,13 +3881,16 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
         }
         if (ObjectTemp != NULL) {
             if (IsString(ObjectTemp) == VS_TRUE) {
-                ObjectNameString = toString(ObjectTemp);
+                VS_STRNCPY(ObjectNameStringLocalBuf, toString(ObjectTemp).AnsiCharPtr,255)
+                ObjectNameString = ObjectNameStringLocalBuf;
                 Index++;
                 ObjectTemp = SRPObject_GetArrayObject(argc, args, Index);
                 if (ObjectTemp == NULL) { //no more parameter
                 }
-                else if (IsString(ObjectTemp) == VS_TRUE)
-                    AttributeChangeString = toString(ObjectTemp);
+                else if (IsString(ObjectTemp) == VS_TRUE) {
+                    VS_STRNCPY(AttributeChangeStringLocalBuf, toString(ObjectTemp).AnsiCharPtr, 255);
+                    AttributeChangeString = AttributeChangeStringLocalBuf;
+                }
             }
         }
         if (SRPParentObject == NULL)
@@ -3678,17 +3950,17 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarServiceClass_runScript:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         EncodableList Result;
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             Result.push_back(fromBool(VS_FALSE));
             Result.push_back(fromString("error..."));
             return new EncodableValue(Result);
         }
-        VS_CHAR* ScriptBuf = toString(&(*plist)[2]);
+        ClassOfStarFlutAnsiString ScriptBuf = toString(&(*plist)[2]);
         VS_CHAR* ErrorInfo;
-        VS_BOOL Ex_Result = l_Service->DoBuffer(toString(&(*plist)[1]), ScriptBuf, (VS_INT32)vs_string_strlen(ScriptBuf), toString(&(*plist)[3]), &ErrorInfo, toString(&(*plist)[4]), VS_FALSE);
+        VS_BOOL Ex_Result = l_Service->DoBuffer(toString(&(*plist)[1]).AnsiCharPtr, ScriptBuf.AnsiCharPtr, (VS_INT32)vs_string_strlen(ScriptBuf.AnsiCharPtr), toString(&(*plist)[3]).AnsiCharPtr, &ErrorInfo, toString(&(*plist)[4]).AnsiCharPtr, VS_FALSE);
         Result.push_back(fromBool(Ex_Result));
         Result.push_back(fromString(ErrorInfo));
         return new EncodableValue(Result);
@@ -3696,23 +3968,23 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarServiceClass_runScriptEx:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         EncodableList Result;
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             Result.push_back(fromBool(VS_FALSE));
             Result.push_back(fromString("error..."));
             return new EncodableValue(Result);
         }
-        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[2])));
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[2]).AnsiCharPtr));
         if (l_BinBuf == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             Result.push_back(fromBool(VS_FALSE));
             Result.push_back(fromString("error..."));
             return new EncodableValue(Result);
         }
         VS_CHAR* ErrorInfo;
-        VS_BOOL Ex_Result = l_Service->DoBuffer(toString(&(*plist)[1]), l_BinBuf->GetBufPtr(0), l_BinBuf->GetOffset(), toString(&(*plist)[3]), &ErrorInfo, toString(&(*plist)[4]), VS_FALSE);
+        VS_BOOL Ex_Result = l_Service->DoBuffer(toString(&(*plist)[1]).AnsiCharPtr, l_BinBuf->GetBufPtr(0), l_BinBuf->GetOffset(), toString(&(*plist)[3]).AnsiCharPtr, &ErrorInfo, toString(&(*plist)[4]).AnsiCharPtr, VS_FALSE);
         Result.push_back(fromBool(Ex_Result));
         Result.push_back(fromString(ErrorInfo));
         return new EncodableValue(Result);
@@ -3721,15 +3993,15 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
         EncodableList Result;
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             Result.push_back(fromBool(VS_FALSE));
             Result.push_back(fromString("error..."));
             return new EncodableValue(Result);
         }
         VS_CHAR* ErrorInfo;
-        VS_BOOL Ex_Result = l_Service->DoFileEx(toString(&(*plist)[1]), toString(&(*plist)[2]), &ErrorInfo, toString(&(*plist)[3]), VS_FALSE, NULL);
+        VS_BOOL Ex_Result = l_Service->DoFileEx(toString(&(*plist)[1]).AnsiCharPtr, toString(&(*plist)[2]).AnsiCharPtr, &ErrorInfo, toString(&(*plist)[3]).AnsiCharPtr, VS_FALSE, NULL);
         Result.push_back(fromBool(Ex_Result));
         Result.push_back(fromString(ErrorInfo));
         return new EncodableValue(Result);
@@ -3738,15 +4010,15 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
         EncodableList Result;
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             Result.push_back(fromBool(VS_FALSE));
             Result.push_back(fromString("error..."));
             return new EncodableValue(Result);
         }
         VS_CHAR* ErrorInfo;
-        VS_BOOL Ex_Result = l_Service->DoFileEx(toString(&(*plist)[1]), toString(&(*plist)[2]), &ErrorInfo, toString(&(*plist)[3]), VS_FALSE, toString(&(*plist)[4]));
+        VS_BOOL Ex_Result = l_Service->DoFileEx(toString(&(*plist)[1]).AnsiCharPtr, toString(&(*plist)[2]).AnsiCharPtr, &ErrorInfo, toString(&(*plist)[3]).AnsiCharPtr, VS_FALSE, toString(&(*plist)[4]).AnsiCharPtr);
         Result.push_back(fromBool(Ex_Result));
         Result.push_back(fromString(ErrorInfo));
         return new EncodableValue(Result);
@@ -3754,9 +4026,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarServiceClass_isServiceRegistered:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
         return fromBool(l_Service->IsRegistered());
@@ -3764,9 +4036,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarServiceClass_checkPassword:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         l_Service->CheckPassword(toBool(&(*plist)[1]));
@@ -3775,17 +4047,17 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarServiceClass_newRawProxy:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
-        void* l_Object = toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[2])));
+        void* l_Object = toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[2]).AnsiCharPtr));
         if (l_Object == NULL) {
             SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[2]));
             return NULL;
         }
-        void* Result = l_Service->NewRawProxy(toString(&(*plist)[1]), l_Object, toString(&(*plist)[3]), toString(&(*plist)[4]), toInt32(&(*plist)[5]));
+        void* Result = l_Service->NewRawProxy(toString(&(*plist)[1]).AnsiCharPtr, l_Object, toString(&(*plist)[3]).AnsiCharPtr, toString(&(*plist)[4]).AnsiCharPtr, toInt32(&(*plist)[5]));
         if (Result == NULL)
             return NULL;
         VS_UUID ObjectID;
@@ -3806,12 +4078,12 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarServiceClass_importRawContext:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
-        void* Result = l_Service->ImportRawContext(toString(&(*plist)[1]), toString(&(*plist)[2]), toBool(&(*plist)[3]), toString(&(*plist)[4]));
+        void* Result = l_Service->ImportRawContext(toString(&(*plist)[1]).AnsiCharPtr, toString(&(*plist)[2]).AnsiCharPtr, toBool(&(*plist)[3]), toString(&(*plist)[4]).AnsiCharPtr);
         if (Result == NULL)
             return NULL;
         VS_UUID ObjectID;
@@ -3832,9 +4104,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarServiceClass_getLastError:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromInt32(0);
         }
         return fromInt32(l_Service->GetLastError());
@@ -3842,9 +4114,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarServiceClass_getLastErrorInfo:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromString("");
         }
         VS_UINT32 LineIndex;
@@ -3858,9 +4130,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarServiceClass_allObject:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_Service == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "service object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return new EncodableValue(EncodableList());
         }
         VS_PARAPKGPTR RetParaPkg;
@@ -3887,32 +4159,32 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarServiceClass_restfulCall:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPInterface* l_Service = (class ClassOfSRPInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         EncodableList Result;
         if (l_Service == NULL) {
             Result.push_back(fromInt32(400));
             Result.push_back(fromString((VS_CHAR*)"{\"code\": -32600, \"message\": \"call _RestfulCall failed,input para error\"}"));
             return new EncodableValue(Result);
         }
-        VS_CHAR* Url = toString(&(*plist)[1]);
-        VS_CHAR* OpCode = toString(&(*plist)[2]);
-        VS_CHAR* JsonString = toString(&(*plist)[3]);
+        ClassOfStarFlutAnsiString Url = toString(&(*plist)[1]);
+        ClassOfStarFlutAnsiString OpCode = toString(&(*plist)[2]);
+        ClassOfStarFlutAnsiString JsonString = toString(&(*plist)[3]);
         VS_INT32 ResultCode;
         VS_CHAR* Ex_Result;
 
-        if (Url == NULL || OpCode == NULL) {
+        if (Url.AnsiCharPtr == NULL || OpCode.AnsiCharPtr == NULL) {
             Result.push_back(fromInt32(400));
             Result.push_back(fromString((VS_CHAR*)"{\"code\": -32600, \"message\": \"call _RestfulCall failed,input para error\"}"));
             return new EncodableValue(Result);
         }
-        if (JsonString == NULL) {
-            Ex_Result = l_Service->RestfulCall(Url, OpCode, NULL, &ResultCode);
+        if (JsonString.AnsiCharPtr == NULL) {
+            Ex_Result = l_Service->RestfulCall(Url.AnsiCharPtr, OpCode.AnsiCharPtr, NULL, &ResultCode);
             Result.push_back(fromInt32(ResultCode));
             Result.push_back(fromString(Ex_Result));
             return new EncodableValue(Result);
         }
         else {
-            Ex_Result = l_Service->RestfulCall(Url, OpCode, JsonString, &ResultCode);
+            Ex_Result = l_Service->RestfulCall(Url.AnsiCharPtr, OpCode.AnsiCharPtr, JsonString.AnsiCharPtr, &ResultCode);
             Result.push_back(fromInt32(ResultCode));
             Result.push_back(fromString(Ex_Result));
             return new EncodableValue(Result);
@@ -3923,9 +4195,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarParaPkgClass_toString:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromString("");
         }
         class ClassOfSRPParaPackageInterface* ResultParaPkg = l_ParaPkg->GetDesc();
@@ -3943,9 +4215,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarParaPkgClass_GetNumber:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromInt32(0);
         }
         return fromInt32(l_ParaPkg->GetNumber());
@@ -3953,9 +4225,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarParaPkgClass_get:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         const flutter::EncodableValue *IndexOrList = &(*plist)[1];
@@ -3980,9 +4252,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarParaPkgClass_clear:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         l_ParaPkg->Clear();
@@ -3991,14 +4263,14 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarParaPkgClass_appendFrom:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        class ClassOfSRPParaPackageInterface* s_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[1])));
+        class ClassOfSRPParaPackageInterface* s_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[1]).AnsiCharPtr));
         if (s_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[1]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[1]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
         return fromBool(l_ParaPkg->AppendFrom(s_ParaPkg));
@@ -4006,14 +4278,14 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarParaPkgClass_equals:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        class ClassOfSRPParaPackageInterface* s_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[1])));
+        class ClassOfSRPParaPackageInterface* s_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[1]).AnsiCharPtr));
         if (s_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[1]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[1]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
         return fromBool(l_ParaPkg->Equals(s_ParaPkg));
@@ -4021,9 +4293,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarParaPkgClass_V:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromString("");
         }
         VS_CHAR* CharValue = l_ParaPkg->GetValueStr();
@@ -4036,9 +4308,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarParaPkgClass_set:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         const EncodableValue *iv = &(*plist)[2];
@@ -4050,9 +4322,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarParaPkgClass_build:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         l_ParaPkg->Clear();
@@ -4086,45 +4358,45 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarParaPkgClass_free:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
-        BasicSRPInterface->DelStringKey(CleObjectMap, toString(&(*plist)[0]));
+        BasicSRPInterface->DelStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr);
         l_ParaPkg->Release();
         return NULL;
     }
     case StarParaPkgClass_dispose:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
-        BasicSRPInterface->DelStringKey(CleObjectMap, toString(&(*plist)[0]));
+        BasicSRPInterface->DelStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr);
         l_ParaPkg->Release();
         return NULL;
     }
     case StarParaPkgClass_releaseOwner:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
-        BasicSRPInterface->DelStringKey(CleObjectMap, toString(&(*plist)[0]));
+        BasicSRPInterface->DelStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr);
         l_ParaPkg->ReleaseOwner();
         return NULL;
     }
     case StarParaPkgClass_asDict:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         l_ParaPkg->AsDict(toBool(&(*plist)[1]));
@@ -4133,9 +4405,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarParaPkgClass_isDict:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
         return fromBool(l_ParaPkg->IsDict());
@@ -4143,19 +4415,19 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarParaPkgClass_fromJSon:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        return fromBool(l_ParaPkg->FromJSon(toString(&(*plist)[1])));
+        return fromBool(l_ParaPkg->FromJSon(toString(&(*plist)[1]).AnsiCharPtr));
     }
     case StarParaPkgClass_toJSon:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromString("");
         }
         return fromString(l_ParaPkg->ToJSon());
@@ -4163,9 +4435,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarParaPkgClass_toTuple:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPParaPackageInterface* l_ParaPkg = (class ClassOfSRPParaPackageInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_ParaPkg == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "parapkg object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         return StarParaPkg_ToTuple(l_ParaPkg);
@@ -4175,9 +4447,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarBinBufClass_toString:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_BinBuf == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromString("");
         }
         return fromString(l_BinBuf->GetName());
@@ -4185,9 +4457,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarBinBufClass_GetOffset:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_BinBuf == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromInt32(0);
         }
         return fromInt32(l_BinBuf->GetOffset());
@@ -4195,9 +4467,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarBinBufClass_init:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_BinBuf == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         l_BinBuf->Init((VS_UINT32)toInt32(&(*plist)[1]));
@@ -4206,9 +4478,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarBinBufClass_clear:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_BinBuf == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         l_BinBuf->Clear();
@@ -4217,12 +4489,11 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarBinBufClass_saveToFile:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_BinBuf == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        VS_CHAR* FileName;
         FILE* hFile;
         VS_INT32 Length;
         VS_INT8* Buf;
@@ -4231,12 +4502,12 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
         Length = l_BinBuf->GetOffset();
         if (Buf == NULL || Length == 0)
             return fromBool(VS_FALSE);
-        FileName = toString(&(*plist)[1]);
+        ClassOfStarFlutAnsiString FileName = toString(&(*plist)[1]);
         VS_BOOL TxtFileFlag = toBool(&(*plist)[2]);
         if (TxtFileFlag == VS_TRUE)
-            hFile = vs_file_fopen(FileName, "wt");
+            hFile = vs_file_fopen(FileName.AnsiCharPtr, "wt");
         else
-            hFile = vs_file_fopen(FileName, "wb");
+            hFile = vs_file_fopen(FileName.AnsiCharPtr, "wb");
         if (hFile == NULL) {
             return fromBool(VS_FALSE);
         }
@@ -4248,23 +4519,22 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarBinBufClass_loadFromFile:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_BinBuf == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
-        VS_CHAR* FileName;
         FILE* hFile;
         VS_INT32 Length;
         VS_INT8* Buf;
         VS_BOOL Result;
 
-        FileName = toString(&(*plist)[1]);
+        ClassOfStarFlutAnsiString FileName = toString(&(*plist)[1]);
         VS_BOOL TxtFileFlag = toBool(&(*plist)[2]);
         if (TxtFileFlag == VS_TRUE)
-            hFile = vs_file_fopen(FileName, "rt");
+            hFile = vs_file_fopen(FileName.AnsiCharPtr, "rt");
         else
-            hFile = vs_file_fopen(FileName, "rb");
+            hFile = vs_file_fopen(FileName.AnsiCharPtr, "rb");
         if (hFile == NULL) {
             return fromBool(VS_FALSE);
         }
@@ -4282,9 +4552,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarBinBufClass_read:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_BinBuf == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             std::vector<uint8_t> adata;
             return new EncodableValue(adata);
         }
@@ -4311,9 +4581,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarBinBufClass_write:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_BinBuf == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromInt32(0);
         }
         VS_INT32 Length = toInt32(&(*plist)[3]);
@@ -4334,46 +4604,100 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarBinBufClass_free:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_BinBuf == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
-        BasicSRPInterface->DelStringKey(CleObjectMap, toString(&(*plist)[0]));
+        BasicSRPInterface->DelStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr);
         l_BinBuf->Release();
         return NULL;
     }
     case StarBinBufClass_dispose:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_BinBuf == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
-        BasicSRPInterface->DelStringKey(CleObjectMap, toString(&(*plist)[0]));
+        BasicSRPInterface->DelStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr);
         l_BinBuf->Release();
         return NULL;
     }
     case StarBinBufClass_releaseOwner:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_BinBuf == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
-        BasicSRPInterface->DelStringKey(CleObjectMap, toString(&(*plist)[0]));
+        BasicSRPInterface->DelStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr);
         l_BinBuf->ReleaseOwner();
         return NULL;
     }
+    case StarBinBufClass_setOffset:
+    {
+        const auto* plist = std::get_if<flutter::EncodableList>(arguments);
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
+        if (l_BinBuf == NULL) {
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
+            return fromBool(VS_FALSE);
+        }
+        VS_INT32 Offset = toInt32(&(*plist)[1]);
+        if( Offset < 0 )
+            Offset = 0;
+        VS_BOOL Result = l_BinBuf -> SetOffset((VS_UINT32)Offset);
+        return fromBool(Result);
+    }
+    case StarBinBufClass_print:
+    {
+        const auto* plist = std::get_if<flutter::EncodableList>(arguments);
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
+        if (l_BinBuf == NULL) {
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
+            return NULL;
+        }
+        ClassOfStarFlutAnsiString Arg = toString(&(*plist)[1]);
+        l_BinBuf->Print(0,"%s",Arg.AnsiCharPtr);
+        return NULL;
+    }
+
+    case StarBinBufClass_asString:
+    {
+        const auto* plist = std::get_if<flutter::EncodableList>(arguments);
+        class ClassOfSRPBinBufInterface* l_BinBuf = (class ClassOfSRPBinBufInterface*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
+        if (l_BinBuf == NULL) {
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "binbuf object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
+            return fromString("");
+        }
+        VS_INT32 Length = l_BinBuf -> GetOffset();
+        if( Length == 0 ){
+            return fromString("");
+        }else{
+            VS_CHAR LocalBuf[10240+1];
+            VS_CHAR *StringBufPtr;
+            if( Length >= 10240 )
+                StringBufPtr = (VS_CHAR *)BasicSRPInterface -> Malloc(Length + 1);
+            else
+                StringBufPtr = LocalBuf;
+            vs_memcpy( StringBufPtr, l_BinBuf->GetBuf(), Length );
+            StringBufPtr[Length] = 0;
+            EncodableValue* RetValue = fromString(StringBufPtr );
+            if( Length >= 10240 )
+                BasicSRPInterface -> Free(StringBufPtr);
+			return RetValue;
+		}
+    }
+
     /*-----------------------------------------------*/
     case StarObjectClass_toString:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromString("");
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
@@ -4399,9 +4723,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarObjectClass_get:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
@@ -4428,19 +4752,21 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarObjectClass_set:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
         VS_CHAR LocalNameBuf[64];
+        VS_CHAR ParaNameLocalBuf[256];
         VS_CHAR* ParaName;
         const flutter::EncodableValue* Name = &(*plist)[1];
         const flutter::EncodableValue* Para = &(*plist)[2];
 
         if (IsString(Name) == VS_TRUE) {
-            ParaName = toString(Name);
+            VS_STRNCPY(ParaNameLocalBuf, toString(Name).AnsiCharPtr, 255);
+            ParaName = ParaNameLocalBuf;
         }
         else {
             if (IsInt32(Name) == VS_TRUE || IsInt64(Name) == VS_TRUE) {
@@ -4462,12 +4788,12 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
             else if (IsDouble(Para) == VS_TRUE)
                 l_Service->SetNameFloatValue(l_StarObject, &ParaName[3], toDouble(Para), VS_FALSE);
             else if (IsString(Para) == VS_TRUE) {
-                l_Service->SetNameStrValue(l_StarObject, &ParaName[3], toString(Para), VS_FALSE);
+                l_Service->SetNameStrValue(l_StarObject, &ParaName[3], toString(Para).AnsiCharPtr, VS_FALSE);
             }else
                 return NULL;
         }
         if (vs_string_strcmp(ParaName, "_Name") == 0) {
-            l_Service->SetName(l_StarObject, toString(Para));
+            l_Service->SetName(l_StarObject, toString(Para).AnsiCharPtr);
             return NULL;
         }
         //---is object atribute?
@@ -4527,9 +4853,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarObjectClass_call:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* SRPObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* SRPObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (SRPObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(SRPObject);
@@ -4537,7 +4863,6 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
         VS_INT32 argc, i, m, n;
         flutter::EncodableValue *RetValue;
         const flutter::EncodableValue* localobject;
-        VS_CHAR* FunctionName;
         VS_BOOL Result;
 
         argc = (VS_INT32)Args->size();
@@ -4546,8 +4871,8 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
             localobject = &(*Args)[i];
             FlutterObjectToLua(l_Service, localobject);
         }
-        FunctionName = toString(&(*plist)[1]);
-        if (l_Service->LuaCall(SRPObject, FunctionName, argc, -1) == VS_FALSE) {
+        ClassOfStarFlutAnsiString FunctionName = toString(&(*plist)[1]);
+        if (l_Service->LuaCall(SRPObject, FunctionName.AnsiCharPtr, argc, -1) == VS_FALSE) {
             m = l_Service->LuaGetTop();
             if (m > n)
                 l_Service->LuaPop(m - n);
@@ -4591,9 +4916,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarObjectClass_newObject:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
@@ -4606,6 +4931,10 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
         const EncodableValue *ObjectTemp;
         VS_BOOL SkipObjectNameString = VS_FALSE;
 
+        VS_CHAR QueueAttrNameLocalBuf[256];
+        VS_CHAR ObjectNameStringLocalBuf[256];
+        VS_CHAR AttributeChangeStringLocalBuf[256];
+
         QueueAttrName = NULL;
         SRPParentObject = NULL;
         AttributeChangeString = NULL;
@@ -4617,7 +4946,8 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
         ObjectTemp = SRPObject_GetArrayObject(argc, args, Index);
         if (ObjectTemp != NULL && IsString(ObjectTemp) == VS_TRUE) {
             if (!StartsWithString(ObjectTemp, StarObjectPrefix)) {
-                QueueAttrName = toString(ObjectTemp);
+                VS_STRNCPY(QueueAttrNameLocalBuf, toString(ObjectTemp).AnsiCharPtr, 255);
+                QueueAttrName = QueueAttrNameLocalBuf;
                 Index++;
                 ObjectTemp = SRPObject_GetArrayObject(argc, args, Index);
                 if (ObjectTemp == NULL) {  //no more parameter
@@ -4631,13 +4961,14 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
                         ObjectNameString = QueueAttrName;
                         QueueAttrName = NULL;
                         SRPParentObject = NULL;
-                        AttributeChangeString = toString(ObjectTemp);
+                        VS_STRNCPY(AttributeChangeStringLocalBuf, toString(ObjectTemp).AnsiCharPtr, 255);
+                        AttributeChangeString = AttributeChangeStringLocalBuf;
                         Index++;
                         SkipObjectNameString = VS_TRUE;
                         ObjectTemp = SRPObject_GetArrayObject(argc, args, Index);  //end
                     }
                     else {
-                        SRPParentObject = toPointer(l_Service->FindStringKey(CleObjectMap,toString(ObjectTemp)));
+                        SRPParentObject = toPointer(l_Service->FindStringKey(CleObjectMap,toString(ObjectTemp).AnsiCharPtr));
                         Index++;
                         ObjectTemp = SRPObject_GetArrayObject(argc, args, Index);
                     }
@@ -4648,7 +4979,7 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
             }
             else {
                 /*--is starobject--*/
-                SRPParentObject = toPointer(l_Service->FindStringKey(CleObjectMap, toString(ObjectTemp)));
+                SRPParentObject = toPointer(l_Service->FindStringKey(CleObjectMap, toString(ObjectTemp).AnsiCharPtr));
                 Index++;
                 ObjectTemp = SRPObject_GetArrayObject(argc, args, Index);
             }
@@ -4658,13 +4989,15 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
         }
         if (ObjectTemp != NULL && SkipObjectNameString == VS_FALSE) {
             if (IsString(ObjectTemp) == VS_TRUE) {
-                ObjectNameString = toString(ObjectTemp);
+                VS_STRNCPY(ObjectNameStringLocalBuf, toString(ObjectTemp).AnsiCharPtr, 255);
+                ObjectNameString = ObjectNameStringLocalBuf;
                 Index++;
                 ObjectTemp = SRPObject_GetArrayObject(argc, args, Index);
                 if (ObjectTemp == NULL) { //no more parameter
                 }
                 else if (IsString(ObjectTemp) == VS_TRUE) {
-                    AttributeChangeString = toString(ObjectTemp);
+                    VS_STRNCPY(AttributeChangeStringLocalBuf, toString(ObjectTemp).AnsiCharPtr, 255);
+                    AttributeChangeString = AttributeChangeStringLocalBuf;
                     Index++;
                     ObjectTemp = SRPObject_GetArrayObject(argc, args, Index);  //end
                 }
@@ -4758,35 +5091,35 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarObjectClass_free:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
-        l_Service->DelStringKey(CleObjectMap, toString(&(*plist)[0]));
+        l_Service->DelStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr);
         l_Service->UnLockGC(l_StarObject);
         return NULL;
     }
     case StarObjectClass_dispose:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
-        l_Service->DelStringKey(CleObjectMap, toString(&(*plist)[0]));
+        l_Service->DelStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr);
         l_Service->UnLockGC(l_StarObject);
         return NULL;
     }
     case StarObjectClass_hasRawContext:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
@@ -4795,9 +5128,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarObjectClass_rawToParaPkg:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
@@ -4814,9 +5147,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarObjectClass_getSourceScript:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromInt32(0);
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
@@ -4825,9 +5158,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarObjectClass_getLastError:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromInt32(0);
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
@@ -4836,9 +5169,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarObjectClass_getLastErrorInfo:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromString("");
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
@@ -4852,29 +5185,29 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarObjectClass_releaseOwnerEx:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
-        l_Service->DelStringKey(CleObjectMap, toString(&(*plist)[0]));
+        l_Service->DelStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr);
         l_Service->ReleaseOwnerEx(l_StarObject);
         return NULL;
     }
     case StarObjectClass_regScriptProcP:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
         if (toBool(&(*plist)[2]) == VS_FALSE)
-            l_Service->UnRegLuaFunc(l_StarObject, toString(&(*plist)[1]), (void*)SRPObject_ScriptCallBack, 0);
+            l_Service->UnRegLuaFunc(l_StarObject, toString(&(*plist)[1]).AnsiCharPtr, (void*)SRPObject_ScriptCallBack, 0);
         else {
-            l_Service->RegLuaFunc(l_StarObject, toString(&(*plist)[1]), (void*)SRPObject_ScriptCallBack, 0);
+            l_Service->RegLuaFunc(l_StarObject, toString(&(*plist)[1]).AnsiCharPtr, (void*)SRPObject_ScriptCallBack, 0);
         }
         return NULL;
     }
@@ -4882,9 +5215,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarObjectClass_instNumber:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromInt32(0);
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
@@ -4893,9 +5226,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarObjectClass_changeParent:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
@@ -4904,7 +5237,7 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
             l_Service->ChangeParent(l_StarObject, NULL, 0);
             return NULL;
         }
-        void* l_ParentObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(parentObjectTag)));
+        void* l_ParentObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(parentObjectTag).AnsiCharPtr));
         if (l_ParentObject == NULL) {
             SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(parentObjectTag));
             return NULL;
@@ -4912,9 +5245,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
         VS_ATTRIBUTEINFO AttributeInfo;
         VS_INT32 i, AttributeNumber;
         vs_memset(&AttributeInfo, 0, sizeof(AttributeInfo));
-        VS_CHAR* QueueAttrName = toString(&(*plist)[2]);
-        if (QueueAttrName != NULL) {
-            if (l_Service->GetAttributeInfoEx(l_ParentObject, QueueAttrName, &AttributeInfo) == VS_FALSE) {
+        ClassOfStarFlutAnsiString QueueAttrName = toString(&(*plist)[2]);
+        if (QueueAttrName.AnsiCharPtr != NULL) {
+            if (l_Service->GetAttributeInfoEx(l_ParentObject, QueueAttrName.AnsiCharPtr, &AttributeInfo) == VS_FALSE) {
                 return NULL;
             }
         }
@@ -4936,26 +5269,26 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarObjectClass_jsonCall:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromString("{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32603, \"message\": \"call _JSonCall failed,Internal error\"}, \"id\": null}");
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
-        VS_CHAR* InputStr = toString(&(*plist)[1]);
-        if (InputStr == NULL) {
+        ClassOfStarFlutAnsiString InputStr = toString(&(*plist)[1]);
+        if (InputStr.AnsiCharPtr == NULL) {
             return fromString("{\"jsonrpc\": \"2.0\", \"error\": {\"code\": -32603, \"message\": \"call _JSonCall failed,Internal error\"}, \"id\": null}");
         }
-        VS_CHAR* ResultStr = l_Service->JSonCall(l_StarObject, InputStr);
+        VS_CHAR* ResultStr = l_Service->JSonCall(l_StarObject, InputStr.AnsiCharPtr);
         return fromString(ResultStr);
     }
 
     case StarObjectClass_active:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
@@ -4965,9 +5298,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarObjectClass_deActive:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return NULL;
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);
@@ -4978,9 +5311,9 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
     case StarObjectClass_isActive:
     {
         const auto* plist = std::get_if<flutter::EncodableList>(arguments);
-        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0])));
+        void* l_StarObject = (void*)toPointer(BasicSRPInterface->FindStringKey(CleObjectMap, toString(&(*plist)[0]).AnsiCharPtr));
         if (l_StarObject == NULL) {
-            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]));
+            SRPControlInterface->ProcessError(VSFAULT_WARNING, __FILE__, __LINE__, "star object[%s] can not be found..", toString(&(*plist)[0]).AnsiCharPtr);
             return fromBool(VS_FALSE);
         }
         class ClassOfSRPInterface* l_Service = SRPInterface->GetSRPInterface(l_StarObject);

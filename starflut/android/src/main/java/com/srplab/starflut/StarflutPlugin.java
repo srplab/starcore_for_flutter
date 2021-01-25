@@ -65,11 +65,6 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
   private Object starCoreThreadCallDeepSyncObject;
   private int starCoreThreadCallDeep = 0;
 
-  private Thread starCoreHandlerThread;
-  private Handler starCoreHandler = null;
-  private Looper starCoreHandlerLooper;
-
-
   boolean StarCoreInitFlag = false;
   StarCoreFactory starcore;
 
@@ -83,7 +78,106 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
   final String StarValueBooleanPrefix_TRUE = "@s_s_t_bool_true";  /*-fix bug for return boolean in arraylist or hashmap-*/
   final String StarValueBooleanPrefix_FALSE = "@s_s_t_bool_false"; 
 
-  /*--objectag:  prefix + uuid + '+' + (objectid/serviceid/groupindex)
+  /*--objectag:  prefix + uuid + '+' + (objectid/serviceid/groupindex) */
+    /*--add 0.9.5--*/
+  final static int MAX_STARTHREAD_NUMBER = 8;
+  class StructOfStarThreadWorker {
+      public Thread ThreadID;
+      public boolean IsBusy;
+
+      boolean FinishFlag;
+      ReentrantLock reentrantLock;
+
+      public Handler starCoreHandler = null;
+      public Looper starCoreHandlerLooper;
+  };
+  StructOfStarThreadWorker[] StarThreadWorker; /* = new StructOfStarThreadWorker[MAX_STARTHREAD_NUMBER]; */ /*StructOfStarThreadWorker*/ /*the index 0 is main thread, and will create at init stage*/
+  Object StarThreadWorkerSyncObject = null;
+
+    boolean CreateStarThreadWorker(Thread In_Thread,Handler In_starCoreHandler,Looper In_starCoreHandlerLooper)  /*failed if max number */
+    {
+        synchronized (StarThreadWorkerSyncObject) {
+            for (int i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+                if (StarThreadWorker[i] == null) {
+                    StructOfStarThreadWorker Worker = new StructOfStarThreadWorker();
+                    Worker.IsBusy = false;
+                    Worker.ThreadID = In_Thread;
+                    Worker.starCoreHandler = In_starCoreHandler;
+                    Worker.starCoreHandlerLooper = In_starCoreHandlerLooper;
+                    Worker.FinishFlag = false;
+                    Worker.reentrantLock = new ReentrantLock();
+                    StarThreadWorker[i] = Worker;
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    boolean CanCreateStarThreadWorker()
+    {
+        synchronized (StarThreadWorkerSyncObject) {
+            for (int i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+                if (StarThreadWorker[i] == null) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    StructOfStarThreadWorker GetStarThreadWorker()  /*get idle worker*/
+    {
+        synchronized (StarThreadWorkerSyncObject) {
+            for (int i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+                if (StarThreadWorker[i] != null && StarThreadWorker[i].IsBusy == false) {
+                    return StarThreadWorker[i];
+                }
+            }
+        }
+        return null;
+    }
+
+    StructOfStarThreadWorker GetStarThreadWorkerCurrent()  /*get idle worker*/
+    {
+        synchronized (StarThreadWorkerSyncObject) {
+            Thread ThreadID = Thread.currentThread();
+
+            for (int i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+                if (StarThreadWorker[i] != null && StarThreadWorker[i].ThreadID == ThreadID) {
+                    return StarThreadWorker[i];
+                }
+            }
+        }
+        return null;
+    }
+
+    void SetStarThreadWorkerBusy(Thread ThreadID, boolean BusyFlag)
+    {
+        synchronized (StarThreadWorkerSyncObject) {
+            for (int i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+                if (StarThreadWorker[i] != null && StarThreadWorker[i].ThreadID == ThreadID) {
+                    StarThreadWorker[i].IsBusy = BusyFlag;
+                    return;
+                }
+            }
+        }
+        return;
+    }
+
+    void SetStarThreadWorkerBusy(boolean BusyFlag)
+    {
+        synchronized (StarThreadWorkerSyncObject) {
+            Thread ThreadID = Thread.currentThread();
+            for (int i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+                if (StarThreadWorker[i] != null && StarThreadWorker[i].ThreadID == ThreadID) {
+                    StarThreadWorker[i].IsBusy = BusyFlag;
+                    return;
+                }
+            }
+        }
+        return;
+    }
 
   /*--not used, may be in future --*/
   class StarFlutWaitResult
@@ -116,7 +210,7 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
           while( FinishFlag == false ){
               reentrantLock.unlock();
               try{
-                  Thread.sleep(10);
+                  Thread.sleep(1);
               }
               catch(Exception ex)
               {
@@ -251,6 +345,11 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
       mainThreadID = Thread.currentThread().getId();
       starCoreThreadCallDeep = 0;
       starCoreThreadCallDeepSyncObject = new Object();
+
+      StarThreadWorker = new StructOfStarThreadWorker[MAX_STARTHREAD_NUMBER];
+      for( int i=0; i < MAX_STARTHREAD_NUMBER; i++ )
+          StarThreadWorker[i] = null;
+      StarThreadWorkerSyncObject = new Object();
 
       StarCoreInitFlag = false;
       mutexObject = new Object();
@@ -636,19 +735,97 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
       break;
     /*--send message to main starcore thread--*/
     default:
+        /* in some case, for thread switching, starCoreThreadCallDeep may be not 0, so remove it */
+        /*
       synchronized(starCoreThreadCallDeepSyncObject){
         if( starCoreThreadCallDeep != 0 ){
           System.out.println("call starflut function ["+call.method+"] failed, current is in starcore thread process");
         }
       }
-      if( starCoreHandler == null) {
-          result.notImplemented();
-          break;
-      }
-      Message message1 = starCoreHandler.obtainMessage();
-      message1.what = starcore_ThreadTick_MethodCall;
-      message1.obj = new Object[]{call,result};
-      starCoreHandler.sendMessage(message1);   
+      */
+        if (call.method == "starcore_moduleExit" || call.method == "starcore_moduleClear") {
+            Message message1 = StarThreadWorker[0].starCoreHandler.obtainMessage();
+            message1.what = starcore_ThreadTick_MethodCall;
+            message1.obj = new Object[]{call,result};
+            StarThreadWorker[0].starCoreHandler.sendMessage(message1);
+        }
+        else {
+            StructOfStarThreadWorker ThreadWorker = GetStarThreadWorker();
+            if (ThreadWorker != null) {
+                Message message1 = ThreadWorker.starCoreHandler.obtainMessage();
+                message1.what = starcore_ThreadTick_MethodCall;
+                message1.obj = new Object[]{call,result};
+                ThreadWorker.starCoreHandler.sendMessage(message1);
+            }
+            else if (CanCreateStarThreadWorker() == true) {
+                /*--create a new worker*/
+                final Integer w_tag = get_WaitResultIndex();
+                StarFlutWaitResult m_WaitResult = new_WaitResult(w_tag);
+
+                m_WaitResult.Lock();
+                Thread starCoreHandlerThread = new Thread(new Runnable(){
+                    @Override
+                    public void run() {
+                        /*--thread message loop--*/
+                        Looper.prepare();
+                        Looper starCoreHandlerLooper = Looper.myLooper();
+
+                        Handler starCoreHandler = new android.os.Handler() {
+                            //--this will be run in mainthread, and process callback from native to dart
+                            public void handleMessage(Message msg) {
+                                switch (msg.what) {
+                                    case starcore_ThreadTick_MethodCall: {
+                                        SetStarThreadWorkerBusy(true);
+                                        /*--object : [MethodCall,Result]*/
+                                        Object[] args = (Object[]) msg.obj;
+                                        synchronized (starCoreThreadCallDeepSyncObject) {
+                                            starCoreThreadCallDeep = starCoreThreadCallDeep + 1;
+                                        }
+                                        Object result = onMethodCall_Do((MethodCall) args[0]);
+                                        synchronized (starCoreThreadCallDeepSyncObject) {
+                                            starCoreThreadCallDeep = starCoreThreadCallDeep - 1;
+                                        }
+                                        Message message1 = mainHandler.obtainMessage();
+                                        message1.what = starcore_sendResult_MessageID;
+                                        message1.obj = new Object[]{args[1], result};
+                                        mainHandler.sendMessage(message1);
+                                        SetStarThreadWorkerBusy(false);
+                                    }
+                                    break;
+                                }
+                            }
+                        };
+
+                        CreateStarThreadWorker(Thread.currentThread(),starCoreHandler,starCoreHandlerLooper);
+
+                        StarFlutWaitResult t_WaitResult = get_WaitResult(w_tag);
+                        t_WaitResult.SetResult(true);
+
+                        Looper.loop();
+
+                        StructOfStarThreadWorker ThreadWorker = GetStarThreadWorkerCurrent();
+                        ThreadWorker.reentrantLock.lock();
+                        ThreadWorker.FinishFlag = true;
+                        ThreadWorker.reentrantLock.unlock();
+                    }
+                });
+                starCoreHandlerThread.start();
+
+                m_WaitResult.WaitResult();
+                m_WaitResult.UnLock();
+
+                remove_WaitResult(w_tag);
+
+                StructOfStarThreadWorker ThreadWorker_Local = GetStarThreadWorker();
+                Message message1 = ThreadWorker_Local.starCoreHandler.obtainMessage();
+                message1.what = starcore_ThreadTick_MethodCall;
+                message1.obj = new Object[]{call,result};
+                ThreadWorker_Local.starCoreHandler.sendMessage(message1);
+            }
+            else {
+                result.error("-1", "Can not create worker thread",null);
+            }
+        }
       break;   
     }
   }
@@ -748,13 +925,13 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
         StarFlutWaitResult m_WaitResult = new_WaitResult(w_tag);
 
         m_WaitResult.Lock();
-        starCoreHandlerThread = new Thread(new Runnable(){
+        Thread starCoreHandlerThread = new Thread(new Runnable(){
           @Override
           public void run() {
             /*--thread message loop--*/
             Looper.prepare();
-            starCoreHandlerLooper = Looper.myLooper();
-            starCoreHandler = new android.os.Handler(){
+            Looper starCoreHandlerLooper = Looper.myLooper();
+            Handler starCoreHandler = new android.os.Handler(){
               //--this will be run in mainthread, and process callback from native to dart
               public void handleMessage(Message msg) {
                 switch( msg.what ){
@@ -768,6 +945,7 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
                   break;
                 case starcore_ThreadTick_MethodCall :
                   {
+                      SetStarThreadWorkerBusy(true);
                     /*--object : [MethodCall,Result]*/
                     Object[] args = (Object[])msg.obj;
                     synchronized(starCoreThreadCallDeepSyncObject){
@@ -781,6 +959,7 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
                     message1.what = starcore_sendResult_MessageID;
                     message1.obj = new Object[]{args[1],result};
                     mainHandler.sendMessage(message1);
+                      SetStarThreadWorkerBusy(false);
                   }
                   break;                                                                
                 }
@@ -795,28 +974,41 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
                   synchronized (mutexObject)
                   {
                       if (ExitAppFlag == true){
-                        starCoreHandlerLooper.quit();
+                          /*  exit will cause looper exception
+                          for (int i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+                              if (StarThreadWorker[i] != null) {
+                                  StarThreadWorker[i]. starCoreHandlerLooper.quit();
+                              }
+                          }
+                          */
                         break;
                       }
                   }                  
                   try {
                     Thread.sleep(5);
-                    Message message1 = starCoreHandler.obtainMessage();
+                    Message message1 = StarThreadWorker[0].starCoreHandler.obtainMessage();
                     message1.what = starcore_ThreadTick_MessageID;
                     message1.obj = null;
-                    starCoreHandler.sendMessage(message1);                    
+                      StarThreadWorker[0].starCoreHandler.sendMessage(message1);
                   }
                   catch(Exception ex)
                   {
                   }
                 }
               }
-            }).start(); 
+            }).start();
+
+            CreateStarThreadWorker(Thread.currentThread(),starCoreHandler,starCoreHandlerLooper);
             
             StarFlutWaitResult t_WaitResult = get_WaitResult(w_tag);
             t_WaitResult.SetResult(true);  
 
-            Looper.loop();           
+            Looper.loop();
+
+            StructOfStarThreadWorker ThreadWorker = GetStarThreadWorkerCurrent();
+            ThreadWorker.reentrantLock.lock();
+            ThreadWorker.FinishFlag = true;
+            ThreadWorker.reentrantLock.unlock();
           }
         });
         starCoreHandlerThread.start();     
@@ -826,10 +1018,10 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
         
         remove_WaitResult(w_tag);
 
-        Message message1 = starCoreHandler.obtainMessage();
+        Message message1 = StarThreadWorker[0].starCoreHandler.obtainMessage();
         message1.what = starcore_ThreadTick_MethodCall;
         message1.obj = new Object[]{call,result};
-        starCoreHandler.sendMessage(message1);              
+        StarThreadWorker[0].starCoreHandler.sendMessage(message1);
       }
       break;
 
@@ -906,10 +1098,10 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
           starcore._RegDispatchRequest_P(new StarDispatchRequestCallBackInterface(){    
             public void Invoke()
             {        
-              Message message1 = starCoreHandler.obtainMessage();
+              Message message1 = StarThreadWorker[0].starCoreHandler.obtainMessage();
               message1.what = starcore_ThreadTick_MessageID;
               message1.obj = null;
-              starCoreHandler.sendMessage(message1);     
+                StarThreadWorker[0].starCoreHandler.sendMessage(message1);
               return;
             }
           });
@@ -941,10 +1133,10 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
           starcore._RegDispatchRequest_P(new StarDispatchRequestCallBackInterface(){    
             public void Invoke()
             {        
-              Message message1 = starCoreHandler.obtainMessage();
+              Message message1 = StarThreadWorker[0].starCoreHandler.obtainMessage();
               message1.what = starcore_ThreadTick_MessageID;
               message1.obj = null;
-              starCoreHandler.sendMessage(message1);     
+                StarThreadWorker[0].starCoreHandler.sendMessage(message1);
               return;
             }
           });          
@@ -983,10 +1175,10 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
           starcore._RegDispatchRequest_P(new StarDispatchRequestCallBackInterface(){    
             public void Invoke()
             {        
-              Message message1 = starCoreHandler.obtainMessage();
+              Message message1 = StarThreadWorker[0].starCoreHandler.obtainMessage();
               message1.what = starcore_ThreadTick_MessageID;
               message1.obj = null;
-              starCoreHandler.sendMessage(message1);     
+                StarThreadWorker[0].starCoreHandler.sendMessage(message1);
               return;
             }
           });          
@@ -1018,11 +1210,41 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
           {
             if( StarCoreInitFlag == false )
                 return true;
-            
+            /*  exit will cause looper exception
+              for (int i = 1; i < MAX_STARTHREAD_NUMBER; i++) {
+                  if (StarThreadWorker[i] != null) {
+                      StarThreadWorker[i].reentrantLock.lock();
+                  }
+              }
+              */
             synchronized (mutexObject)
             {
                 ExitAppFlag = true;
-            } 
+            }
+
+            /*
+              for (int i = 1; i < MAX_STARTHREAD_NUMBER; i++) {
+                  if (StarThreadWorker[i] != null) {
+                      while( StarThreadWorker[i].FinishFlag == false ){
+                          StarThreadWorker[i].reentrantLock.unlock();
+                          try{
+                              Thread.sleep(1);
+                          }
+                          catch(Exception ex)
+                          {
+                          }
+                          StarThreadWorker[i].reentrantLock.lock();
+                      }
+                  }
+              }
+
+              for (int i = 1; i < MAX_STARTHREAD_NUMBER; i++) {
+                  if (StarThreadWorker[i] != null) {
+                      StarThreadWorker[i].reentrantLock.unlock();
+                  }
+              }
+              */
+
             CleObjectMap.clear(); 
 
             starcore._SRPLock();
@@ -1050,6 +1272,7 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
                 {
                     if( StarflutPlugin_IsDetached == true )
                         return null; /*add 2020/11/20*/
+                    SetStarThreadWorkerBusy(true);
                   final Integer w_tag = get_WaitResultIndex();
                   StarFlutWaitResult m_WaitResult = new_WaitResult(w_tag);
 
@@ -1073,6 +1296,7 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
                   
                   remove_WaitResult(w_tag);
                   starcore._SRPLock();
+                    SetStarThreadWorkerBusy(false);
                   return result;       
                 }
               }); 
@@ -2464,7 +2688,55 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
             return null;           
           }
 
-    /*-----------------------------------------------*/
+        case "StarBinBufClass_setOffset" : /*StarBinBufClass_setOffset*/
+        {
+            ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
+            StarBinBufClass l_BinBuf = (StarBinBufClass)CleObjectMap.get((String)plist.get(0));
+            if( l_BinBuf == null ) {
+                System.out.println(String.format("binbuf object[%s] can not be found..", (String) plist.get(0)));
+                return false;
+            }
+
+            starcore._SRPLock();
+            int Offset = (int)plist.get(1);
+            if( Offset < 0 )
+                Offset = 0;
+            boolean Result = l_BinBuf._SetOffset(Offset);
+            starcore._SRPUnLock();
+            return Result;
+        }
+
+        case "StarBinBufClass_print" : /*StarBinBufClass_print*/
+        {
+            ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
+            StarBinBufClass l_BinBuf = (StarBinBufClass)CleObjectMap.get((String)plist.get(0));
+            if( l_BinBuf == null ) {
+                System.out.println(String.format("binbuf object[%s] can not be found..", (String) plist.get(0)));
+                return null;
+            }
+
+            starcore._SRPLock();
+            l_BinBuf._Print((String)plist.get(1));
+            starcore._SRPUnLock();
+            return null;
+        }
+
+        case "StarBinBufClass_asString" : /*StarBinBufClass_asString*/
+        {
+            ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
+            StarBinBufClass l_BinBuf = (StarBinBufClass)CleObjectMap.get((String)plist.get(0));
+            if( l_BinBuf == null ) {
+                System.out.println(String.format("binbuf object[%s] can not be found..", (String) plist.get(0)));
+                return "";
+            }
+
+            starcore._SRPLock();
+            String Result = (String)l_BinBuf._Get(0,0,"s");
+            starcore._SRPUnLock();
+            return Result;
+        }
+
+        /*-----------------------------------------------*/
     case "StarObjectClass_toString" : /*StarObjectClass_toString*/
           {
             ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
@@ -2724,7 +2996,8 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
               final String FuncName = (String)plist.get(1);
               l_StarObject._RegScriptProc_P((String)plist.get(1),new StarObjectScriptProcInterface(){    
                 public Object Invoke(Object CleObject,Object[] Paras)
-                {        
+                {
+                    SetStarThreadWorkerBusy(true);
                   final StarObjectClass i_StarObject = (StarObjectClass)CleObject;
                   String StarObjectID = (String)((StarObjectClass)i_StarObject)._Get("_ID");
                   String CleObjectID = StarObjectPrefix+UUID.randomUUID().toString();
@@ -2755,15 +3028,17 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
                   starcore._SRPLock();
 
                   //--process output result
-                  ArrayList<Object> b_Result = new ArrayList<Object>();
-                  b_Result.add(result);
-                  Object[] pResult = processInputArgs(b_Result);
-                  if( pResult[0] instanceof ArrayList<?> ){
-                    ArrayList<Object> ll = (ArrayList<Object>)pResult[0];
-                    return ll.toArray(); 
-                  }else{
-                    return pResult[0];     
-                  }
+                    if( result instanceof ArrayList<?> ){
+                        Object[] pResult = processInputArgs((ArrayList<Object>)result);
+                        SetStarThreadWorkerBusy(false);
+                        return pResult;
+                    }else {
+                        ArrayList<Object> b_Result = new ArrayList<Object>();
+                        b_Result.add(result);
+                        Object[] pResult = processInputArgs(b_Result);
+                        SetStarThreadWorkerBusy(false);
+                        return pResult[0];
+                    }
                 }
               }); 
             }

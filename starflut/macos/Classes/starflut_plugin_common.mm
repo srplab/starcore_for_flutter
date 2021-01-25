@@ -26,13 +26,9 @@ static NSRecursiveLock *g_WaitResultMap_mutexObject;
 static int g_WaitResultMap_Index;
 static NSMutableDictionary *g_WaitResultMap;
 
-static NSRecursiveLock *starCoreThreadCallDeepSyncObject;
-static int starCoreThreadCallDeep = 0;
+//static NSRecursiveLock *starCoreThreadCallDeepSyncObject;
+//static int starCoreThreadCallDeep = 0;
 static dispatch_queue_t starCoreHandler = nil;
-
-static NSMutableArray *starMessageQueue = nil;
-static NSRecursiveLock *starMessageQueueLock = nil;
-static NSCondition *starMessageQueueCond = nil;
 
 static FlutterMethodChannel* channel;
 
@@ -167,6 +163,9 @@ extern "C" void Init_openssl(void);
 #define StarBinBufClass_free 608
 #define StarBinBufClass_dispose 609
 #define StarBinBufClass_releaseOwner 610
+#define StarBinBufClass_setOffset 611
+#define StarBinBufClass_print 612
+#define StarBinBufClass_asString 613
 
 #define StarObjectClass_toString 700
 #define StarObjectClass_get 701
@@ -210,6 +209,19 @@ static VS_CHAR *toString(NSString *val)
     if( val == nil || [val isKindOfClass:[NSNull class]] )
         return NULL;
     const char* destDir = [val UTF8String];
+    return (VS_CHAR *)destDir;
+}
+
+static VS_CHAR *toStringEx(NSString *val,VS_INT32 *Length)
+{
+    if( val == nil || [val isKindOfClass:[NSNull class]] ){
+        if( Length != NULL)
+            (*Length) = 0;
+        return NULL;
+    }
+    const char* destDir = [val UTF8String];
+    if( Length != NULL)
+        (*Length) = (VS_INT32)[val lengthOfBytesUsingEncoding:NSUTF8StringEncoding];
     return (VS_CHAR *)destDir;
 }
 
@@ -301,32 +313,162 @@ static id SRPObject_GetArrayObject(VS_INT32 argc,NSArray *args,VS_INT32 Index)
 }
 @end
 
-void sendStarMessage(StarflutMessage *message)
-{
-    [starMessageQueueLock lock];
-    [starMessageQueue addObject:message];
-    [starMessageQueueLock unlock];
+static VS_COND waitThreadCond;
+/*--add 0.9.5--*/
+#define MAX_STARTHREAD_NUMBER 8
 
-    [starMessageQueueCond lock];
-    [starMessageQueueCond signal];
-    [starMessageQueueCond unlock];
+struct StructOfStarThreadWorker {
+    VS_THREADID ThreadID;
+    VS_COND ThreadExitCond;
+    VS_BOOL IsBusy;
+
+    NSMutableArray *starMessageQueue;
+    NSRecursiveLock *starMessageQueueLock;
+    NSCondition *starMessageQueueCond;
+};
+
+static struct StructOfStarThreadWorker *StarThreadWorker[MAX_STARTHREAD_NUMBER];  /*the index 0 is main thread, and will create at init stage*/
+static VS_MUTEX StarThreadWorkerSyncObject;
+
+static VS_BOOL CreateStarThreadWorker(VS_THREADID ThreadID)  /*failed if max number */
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] == NULL) {
+            struct StructOfStarThreadWorker* Worker = new StructOfStarThreadWorker(); // (struct StructOfStarThreadWorker*)malloc(sizeof(struct StructOfStarThreadWorker));
+            Worker->IsBusy = VS_FALSE;
+            Worker->ThreadID = ThreadID;
+            vs_cond_init(&Worker->ThreadExitCond);
+            StarThreadWorker[i] = Worker;
+
+            Worker->starMessageQueue = [[NSMutableArray alloc] init];
+            Worker->starMessageQueueLock = [[NSRecursiveLock alloc] init];
+            Worker->starMessageQueueCond = [[NSCondition alloc] init];
+
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return VS_TRUE;
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return VS_FALSE;
 }
 
-StarflutMessage *getStarMessage()
+static VS_BOOL CanCreateStarThreadWorker()
 {
-    [starMessageQueueLock lock];
-    while( [starMessageQueue count] == 0 ){
-        [starMessageQueueLock unlock];
-        [starMessageQueueCond lock];
-        [starMessageQueueCond wait];
-        [starMessageQueueCond unlock];
-        [starMessageQueueLock lock];
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] == NULL) {
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return VS_TRUE;
+        }
     }
-    StarflutMessage *message = [starMessageQueue objectAtIndex:0];
-    [starMessageQueue removeObjectAtIndex:0];
-    [starMessageQueueLock unlock];
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return VS_FALSE;
+}
+
+static struct StructOfStarThreadWorker* GetStarThreadWorker()  /*get idle worker*/
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] != NULL && StarThreadWorker[i]->IsBusy == VS_FALSE ) {
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return StarThreadWorker[i];
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return NULL;
+}
+
+static struct StructOfStarThreadWorker* GetStarThreadWorkerCurrent()  /*get idle worker*/
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    VS_THREADID ThreadID = vs_thread_currentid();
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] != NULL && StarThreadWorker[i]->ThreadID == ThreadID) {
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return StarThreadWorker[i];
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return NULL;
+}
+
+/*
+static void SetStarThreadWorkerBusy(VS_THREADID ThreadID, VS_BOOL BusyFlag)
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] != NULL && StarThreadWorker[i]->ThreadID == ThreadID) {
+            StarThreadWorker[i]->IsBusy = BusyFlag;
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return;
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return;
+}
+*/
+
+static void SetStarThreadWorkerBusy(VS_BOOL BusyFlag)
+{
+    vs_mutex_lock(&StarThreadWorkerSyncObject);
+    VS_THREADID ThreadID = vs_thread_currentid();
+    for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+        if (StarThreadWorker[i] != NULL && StarThreadWorker[i]->ThreadID == ThreadID) {
+            StarThreadWorker[i]->IsBusy = BusyFlag;
+            vs_mutex_unlock(&StarThreadWorkerSyncObject);
+            return;
+        }
+    }
+    vs_mutex_unlock(&StarThreadWorkerSyncObject);
+    return;
+}
+
+void sendStarMessage(struct StructOfStarThreadWorker *Worker,StarflutMessage *message)
+{
+    [Worker->starMessageQueueLock lock];
+    [Worker->starMessageQueue addObject:message];
+    [Worker->starMessageQueueLock unlock];
+
+    [Worker->starMessageQueueCond lock];
+    [Worker->starMessageQueueCond signal];
+    [Worker->starMessageQueueCond unlock];
+}
+
+StarflutMessage *getStarMessage(struct StructOfStarThreadWorker *Worker)
+{
+    [Worker->starMessageQueueLock lock];
+    while( [Worker->starMessageQueue count] == 0 ){
+        [Worker->starMessageQueueLock unlock];
+        [Worker->starMessageQueueCond lock];
+        [Worker->starMessageQueueCond wait];
+        [Worker->starMessageQueueCond unlock];
+        [Worker->starMessageQueueLock lock];
+    }
+    StarflutMessage *message = [Worker->starMessageQueue objectAtIndex:0];
+    [Worker->starMessageQueue removeObjectAtIndex:0];
+    [Worker->starMessageQueueLock unlock];
     return message;
 }
+
+
+static void vs_cond_wait_local( VS_COND *cond)
+{
+#if( VS_OS_TYPE == VS_OS_WINDOWS )
+	WaitForSingleObject((*cond),INFINITE);
+	ResetEvent((*cond));
+	return;
+#endif
+#if( VS_OS_TYPE == VS_OS_WP || VS_OS_TYPE == VS_OS_WINRT || VS_OS_TYPE == VS_OS_WIN10 )
+	WaitForSingleObjectEx((*cond),INFINITE,VS_FALSE);
+	ResetEvent((*cond));
+	return;
+#endif
+#if( VS_OS_TYPE == VS_OS_LINUX || VS_OS_TYPE == VS_OS_ANDROID || VS_OS_TYPE == VS_OS_ANDROIDV7A || VS_OS_TYPE == VS_OS_ANDROIDX86 || VS_OS_TYPE == VS_OS_IOS || VS_OS_TYPE == VS_OS_MACOS )
+	pthread_cond_wait(&cond ->cond,&cond ->mutex);
+#endif
+}
+
 
 /*---*/
 @interface StarCoreWaitResult:NSObject{
@@ -424,11 +566,12 @@ void remove_WaitResult(int Index)
 static void Starflut_SRPDispatchRequestCallBack(VS_UWORD Para)
 {
     StarflutMessage *message = [StarflutMessage initStarflutMessage:starcore_ThreadTick_MessageID];
-    sendStarMessage(message);
+    sendStarMessage(StarThreadWorker[0],message);
 }
 
 static VS_UWORD SRPAPI GlobalMsgCallBack(VS_ULONG ServiceGroupID, VS_ULONG uMsg, VS_UWORD wParam, VS_UWORD lParam, VS_BOOL *IsProcessed, VS_UWORD Para)
 {
+    SetStarThreadWorkerBusy(VS_TRUE);
     switch( uMsg ){
         case MSG_VSDISPMSG :
         case MSG_VSDISPLUAMSG :
@@ -500,9 +643,11 @@ static VS_UWORD SRPAPI GlobalMsgCallBack(VS_ULONG ServiceGroupID, VS_ULONG uMsg,
             [m_WaitResult UnLock];
             remove_WaitResult(w_tag);
             SRPControlInterface->SRPLock();
+            SetStarThreadWorkerBusy(VS_FALSE);
             return 0;
         }
         default :
+            SetStarThreadWorkerBusy(VS_FALSE);
             return 0;
     }
 }
@@ -569,8 +714,11 @@ static VS_BOOL StarParaPkg_FromTuple_Sub(NSArray *tuple, VS_INT32 StartIndex,cla
                     return VS_FALSE;
                 }
                 ParaPkg -> InsertObject( Index, SRPObject);
-            }else
-                ParaPkg -> InsertStrEx(Index,toString(valueobj),(VS_UINT32)[valueobj length] );
+            }else{
+                VS_INT32 Length;
+                VS_CHAR *CharPtr = toStringEx(valueobj,&Length);
+                ParaPkg -> InsertStrEx(Index,CharPtr,(VS_UINT32)Length );
+            }
         }else if( [valueobj isKindOfClass:[NSArray class]] ){
             class ClassOfSRPParaPackageInterface *l_ParaPkg = BasicSRPInterface ->GetParaPkgInterface();
             if( StarParaPkg_FromTuple_Sub(valueobj,0, l_ParaPkg, 0) == VS_FALSE ){
@@ -1256,7 +1404,9 @@ static VS_BOOL FlutterObjectToLua ( class ClassOfSRPInterface *SRPInterface, id 
             SRPInterface -> LuaPushObject( SRPObject );
             return VS_TRUE;
         }else{
-            SRPInterface -> LuaPushLString(toString(valueobj),(VS_UINT32)[valueobj length] );
+            VS_INT32 Length;
+            VS_CHAR *CharPtr = toStringEx(valueobj,&Length);
+            SRPInterface -> LuaPushLString(CharPtr,Length);
             return VS_TRUE;
         }
     }else if( [valueobj isKindOfClass:[NSArray class]] ){
@@ -1388,6 +1538,7 @@ id StarObject_getValue(class ClassOfSRPInterface *SRPInterface,void *SRPObject,i
 
 static VS_INT32 SRPObject_ScriptCallBack(void *L)
 {
+    SetStarThreadWorkerBusy(VS_TRUE);
     //VS_ULONG ServiceGroupID = SRPControlInterface ->LuaGetInt( L, SRPControlInterface->LuaUpValueIndex(L, 1) );
     VS_CHAR *ScriptName = SRPInterface -> LuaToString( SRPInterface -> LuaUpValueIndex(3) );
     void *Object = SRPInterface -> LuaToObject(1);
@@ -1398,6 +1549,7 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
     //---create parameter
     if( l_Service -> LuaGetTop() == 0 ){
         l_Service->ProcessError(VSFAULT_WARNING, __FILE__,__LINE__,"Call Object[%s] FlutterFunction [%s] Error Parameter Number ",l_Service -> GetName(Object),ScriptName );
+        SetStarThreadWorkerBusy(VS_FALSE);
         return 0;
     }
     VS_INT32 n = SRPInterface -> LuaGetTop() - 1;
@@ -1411,6 +1563,7 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
             out[i] = [NSNull null];
         if( LuaToFlutterResult == VS_FALSE ){
             l_Service->ProcessError(VSFAULT_WARNING, __FILE__,__LINE__,"Call Object[%s] JavaFunction [%s] Error,Parameter[%d] failed ",l_Service -> GetName(Object),ScriptName,i );
+            SetStarThreadWorkerBusy(VS_FALSE);
             return 0;
         }
     }
@@ -1422,6 +1575,7 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
 
     VS_UUID ObjectID;
     l_Service ->GetID(Object, &ObjectID);
+    l_Service->AddRefEx(Object);
     NSString *CleObjectID = [NSString stringWithFormat:@"%@%@",StarObjectPrefix,[[NSUUID UUID] UUIDString]];
     [CleObjectMap setObject:fromPointer(Object) forKey:CleObjectID];
 
@@ -1474,10 +1628,12 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
     SRPControlInterface->SRPLock();
     l_Service -> SetRetCode(Object,VSRCALL_OK);
     if( RetValue == nil ){
+        SetStarThreadWorkerBusy(VS_FALSE);
         return 0;
     }else{
         n = l_Service ->LuaGetTop();
         FlutterObjectToLua( l_Service, RetValue);
+        SetStarThreadWorkerBusy(VS_FALSE);
         return l_Service ->LuaGetTop()-n;
     }
 }
@@ -1503,16 +1659,15 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
         CleObjectMap = [NSMutableDictionary dictionary];
         starcoreCmdMap = [NSMutableDictionary dictionary];
 
-        starCoreThreadCallDeepSyncObject = [[NSRecursiveLock alloc] init];
+        //starCoreThreadCallDeepSyncObject = [[NSRecursiveLock alloc] init];
         mutexObject = [[NSRecursiveLock alloc] init];
 
         g_WaitResultMap_mutexObject = [[NSRecursiveLock alloc] init];
         g_WaitResultMap_Index = 1;
         g_WaitResultMap = [NSMutableDictionary dictionary];
 
-        starMessageQueue = [[NSMutableArray alloc] init];
-        starMessageQueueLock = [[NSRecursiveLock alloc] init];
-        starMessageQueueCond = [[NSCondition alloc] init];
+        memset(StarThreadWorker, 0, sizeof(StarThreadWorker));
+        vs_mutex_init(&StarThreadWorkerSyncObject);
 
         [starcoreCmdMap setObject:[NSNumber numberWithInt:starcore_getDocumentPath] forKey:@"starcore_getDocumentPath"];
         [starcoreCmdMap setObject:[NSNumber numberWithInt:starcore_isAndroid] forKey:@"starcore_isAndroid"];
@@ -1630,6 +1785,9 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarBinBufClass_free] forKey:@"StarBinBufClass_free"];
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarBinBufClass_dispose] forKey:@"StarBinBufClass_dispose"];
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarBinBufClass_releaseOwner] forKey:@"StarBinBufClass_releaseOwner"];
+        [starcoreCmdMap setObject:[NSNumber numberWithInt:StarBinBufClass_setOffset] forKey:@"StarBinBufClass_setOffset"];
+        [starcoreCmdMap setObject:[NSNumber numberWithInt:StarBinBufClass_print] forKey:@"StarBinBufClass_print"];
+        [starcoreCmdMap setObject:[NSNumber numberWithInt:StarBinBufClass_asString] forKey:@"StarBinBufClass_asString"];
 
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarObjectClass_toString] forKey:@"StarObjectClass_toString"];
         [starcoreCmdMap setObject:[NSNumber numberWithInt:StarObjectClass_get] forKey:@"StarObjectClass_get"];
@@ -1757,21 +1915,83 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
             [self handleMethodCall_Do_Direct:call result:result];
             break;
         default:
+            /* in some case, for thread switching, starCoreThreadCallDeep may be not 0, so remove it */
+            /*
             [starCoreThreadCallDeepSyncObject lock];
             if( starCoreThreadCallDeep != 0 ){
-                [starCoreThreadCallDeepSyncObject unlock];
                 NSLog(@"call starflut function [%@] failed, current is in starcore thread process",call.method);
-                result(nil);
-                break;
             }
             [starCoreThreadCallDeepSyncObject unlock];
-            if( starMessageQueue == nil ){
-                NSLog(@"call starflut function [%@] failed, getFactory must be called first",call.method);
-                result(nil);
-                break;
-            }
-            StarflutMessage *message = [StarflutMessage initStarflutMessage:starcore_ThreadTick_MethodCall call:call result:result];
-            sendStarMessage(message);
+            */
+          if ([index intValue] == starcore_moduleExit || [index intValue] == starcore_moduleClear) {
+              StarflutMessage *message = [StarflutMessage initStarflutMessage:starcore_ThreadTick_MethodCall call:call result:result];
+              sendStarMessage(StarThreadWorker[0],message);
+          }
+          else {
+              struct StructOfStarThreadWorker* ThreadWorker = GetStarThreadWorker();
+              if (ThreadWorker != NULL) {
+                  StarflutMessage *message = [StarflutMessage initStarflutMessage:starcore_ThreadTick_MethodCall call:call result:result];
+                  sendStarMessage(ThreadWorker,message);
+              }
+              else if (CanCreateStarThreadWorker() == VS_TRUE) {
+                  /*--create a new worker*/
+                  //VS_COND waitThreadCond;
+                  vs_cond_init(&waitThreadCond);
+
+                  vs_mutex_lock(&waitThreadCond.mutex);
+
+                   /*--create worker thread--*/
+                   dispatch_async(dispatch_get_global_queue(0, 0), ^{
+                       VS_THREADID hThreadIDTemp = vs_thread_currentid();
+                       CreateStarThreadWorker(hThreadIDTemp);
+                       struct StructOfStarThreadWorker* ThreadWorker = GetStarThreadWorkerCurrent();
+
+                       vs_mutex_lock(&waitThreadCond.mutex);
+                       vs_cond_signal(&waitThreadCond);
+                       vs_mutex_unlock(&waitThreadCond.mutex);
+
+                        while(true) {
+                            StarflutMessage *message = getStarMessage(ThreadWorker);
+                            switch( message->messageID){
+                            case starcore_ThreadTick_MethodCall :
+                            {
+                                SetStarThreadWorkerBusy(VS_TRUE);
+                                NSNumber *index = [starcoreCmdMap objectForKey:call.method];
+                                SRPControlInterface->SRPLock();
+                                id value = [self handleMethodCall_Do:message->call];
+                                if( [index intValue] != starcore_moduleExit)
+                                    SRPControlInterface->SRPUnLock();
+                                dispatch_async(dispatch_get_main_queue(), ^{
+                                    message->result(value);  /*--run in ui thread--*/
+                                });
+                                SetStarThreadWorkerBusy(VS_FALSE);
+                            }
+                            break;
+                            case starcore_ThreadTick_Exit :
+                            {
+                                SRPControlInterface->DetachCurrentThread();
+                                vs_mutex_lock(&ThreadWorker->ThreadExitCond.mutex);
+                                vs_cond_signal(&ThreadWorker->ThreadExitCond);
+                                vs_mutex_unlock(&ThreadWorker->ThreadExitCond.mutex);
+                                return;
+                            }
+                        }
+                    }
+                  });
+
+                  vs_cond_wait_local(&waitThreadCond);
+                  vs_mutex_unlock(&waitThreadCond.mutex);
+                  vs_cond_destroy(&waitThreadCond);
+
+                  struct StructOfStarThreadWorker* ThreadWorker_Local = GetStarThreadWorker();
+                  StarflutMessage *message = [StarflutMessage initStarflutMessage:starcore_ThreadTick_MethodCall call:call result:result];
+                  sendStarMessage(ThreadWorker_Local, message);
+              }
+              else {
+                  NSLog(@"Can not create worker thread");
+                  result(nil);
+              }
+           }
             break;
     }
 }
@@ -1930,8 +2150,33 @@ static VSCore_TermProc  VSTermProc;
                     result(CleObjectID);
                 });
 
+                VS_THREADID hThreadIDTemp = vs_thread_currentid();
+                CreateStarThreadWorker(hThreadIDTemp);
+                struct StructOfStarThreadWorker* ThreadWorker = GetStarThreadWorkerCurrent();
+
+                /*--create timer thread--*/
+                dispatch_async(dispatch_get_global_queue(0, 0), ^{
+                    while(true){
+                        [mutexObject lock];
+                        if (ExitAppFlag == true){
+                            [mutexObject unlock];
+                            for (VS_INT32 i = 0; i < MAX_STARTHREAD_NUMBER; i++) {
+                                if (StarThreadWorker[i] != NULL) {
+                                    StarflutMessage *message = [StarflutMessage initStarflutMessage:starcore_ThreadTick_Exit];
+                                    sendStarMessage(StarThreadWorker[i], message);
+                                }
+                            }
+                            break;
+                         }
+                         [mutexObject unlock];
+                        sleep(10);
+                        StarflutMessage *message = [StarflutMessage initStarflutMessage:starcore_ThreadTick_MessageID];
+                        sendStarMessage(StarThreadWorker[0],message);
+                    }
+                });
+
                 while(true) {
-                    StarflutMessage *message = getStarMessage();
+                    StarflutMessage *message = getStarMessage(ThreadWorker);
                     switch( message->messageID){
                         case starcore_ThreadTick_MessageID :
                         {
@@ -1944,6 +2189,7 @@ static VSCore_TermProc  VSTermProc;
                             break;
                         case starcore_ThreadTick_MethodCall :
                         {
+                            SetStarThreadWorkerBusy(VS_TRUE);
                             NSNumber *index = [starcoreCmdMap objectForKey:call.method];
                             SRPControlInterface->SRPLock();
                             id value = [self handleMethodCall_Do:message->call];
@@ -1952,31 +2198,20 @@ static VSCore_TermProc  VSTermProc;
                             dispatch_async(dispatch_get_main_queue(), ^{
                                 message->result(value);  /*--run in ui thread--*/
                             });
+                            SetStarThreadWorkerBusy(VS_FALSE);
                         }
                             break;
                         case starcore_ThreadTick_Exit :
                         {
+                            vs_mutex_lock(&ThreadWorker->ThreadExitCond.mutex);
+                            vs_cond_signal(&ThreadWorker->ThreadExitCond);
+                            vs_mutex_unlock(&ThreadWorker->ThreadExitCond.mutex);
                             return;
                         }
                     }
                 }
             });
-            /*--create timer thread--*/
-            dispatch_async(dispatch_get_global_queue(0, 0), ^{
-                while(true){
-                    [mutexObject lock];
-                    if (ExitAppFlag == true){
-                        [mutexObject unlock];
-                        StarflutMessage *message = [StarflutMessage initStarflutMessage:starcore_ThreadTick_Exit];
-                        sendStarMessage(message);
-                        break;
-                    }
-                     [mutexObject unlock];
-                    sleep(10);
-                    StarflutMessage *message = [StarflutMessage initStarflutMessage:starcore_ThreadTick_MessageID];
-                    sendStarMessage(message);
-                }
-            });
+
         }
             break;
         case starcore_sRPDispatch :
@@ -2256,9 +2491,28 @@ static VSCore_TermProc  VSTermProc;
         case starcore_moduleExit :
         {
             if( ModuleInitFlag == true ){
+                for (VS_INT32 i = 1; i < MAX_STARTHREAD_NUMBER; i++) {
+                    if (StarThreadWorker[i] != NULL) {
+                        vs_mutex_lock(&StarThreadWorker[i]->ThreadExitCond.mutex);
+                    }
+                }
+
                 [mutexObject lock];
                 ExitAppFlag = true;
                 [mutexObject unlock];
+
+                for (VS_INT32 i = 1; i < MAX_STARTHREAD_NUMBER; i++) {
+                    if (StarThreadWorker[i] != NULL) {
+                        vs_cond_wait_local(&StarThreadWorker[i]->ThreadExitCond);
+                    }
+                }
+
+                for (VS_INT32 i = 1; i < MAX_STARTHREAD_NUMBER; i++) {
+                    if (StarThreadWorker[i] != NULL) {
+                        vs_mutex_unlock(&StarThreadWorker[i]->ThreadExitCond.mutex);
+                    }
+                }
+
                 [self removeFromObjectMap:NULL];
 
                 BasicSRPInterface ->ClearService();
@@ -3628,6 +3882,59 @@ static VSCore_TermProc  VSTermProc;
             return nil;
         }
 
+        case StarBinBufClass_setOffset :
+        {
+            NSArray *plist = (NSArray *)call.arguments;
+            class ClassOfSRPBinBufInterface *l_BinBuf = (class ClassOfSRPBinBufInterface *)toPointer([CleObjectMap objectForKey:[plist objectAtIndex:0]]);
+            if( l_BinBuf == NULL ){
+                NSLog(@"binbuf object[%@] can not be found..",[plist objectAtIndex:0]);
+                return fromBool(VS_FALSE);
+            }
+            VS_INT32 Offset = toInt32([plist objectAtIndex:1]);
+            if( Offset < 0 )
+                Offset = 0;
+            VS_BOOL Result = l_BinBuf -> SetOffset((VS_UINT32)Offset);
+            return fromBool(Result);
+        }
+        case StarBinBufClass_print :
+        {
+            NSArray *plist = (NSArray *)call.arguments;
+            class ClassOfSRPBinBufInterface *l_BinBuf = (class ClassOfSRPBinBufInterface *)toPointer([CleObjectMap objectForKey:[plist objectAtIndex:0]]);
+            if( l_BinBuf == NULL ){
+                NSLog(@"binbuf object[%@] can not be found..",[plist objectAtIndex:0]);
+                return nil;
+            }
+            VS_CHAR *Arg = toString([plist objectAtIndex:1]);
+            l_BinBuf ->Print(0,"%s",Arg);
+            return nil;
+        }
+
+       case StarBinBufClass_asString :
+        {
+            NSArray *plist = (NSArray *)call.arguments;
+            class ClassOfSRPBinBufInterface *l_BinBuf = (class ClassOfSRPBinBufInterface *)toPointer([CleObjectMap objectForKey:[plist objectAtIndex:0]]);
+            if( l_BinBuf == NULL ){
+                NSLog(@"binbuf object[%@] can not be found..",[plist objectAtIndex:0]);
+                return @"";
+            }
+            VS_INT32 Length = l_BinBuf -> GetOffset();
+            if( Length == 0 ){
+                return @"";
+            }else{
+                VS_CHAR LocalBuf[10240+1];
+                VS_CHAR *StringBufPtr;
+                if( Length >= 10240 )
+                    StringBufPtr = (VS_CHAR *)BasicSRPInterface -> Malloc(Length + 1);
+                else
+                    StringBufPtr = LocalBuf;
+                vs_memcpy( StringBufPtr, l_BinBuf->GetBuf(), Length );
+                StringBufPtr[Length] = 0;
+                NSString* RetValue = fromString(StringBufPtr );
+                if( Length >= 10240 )
+                    BasicSRPInterface -> Free(StringBufPtr);
+    			return RetValue;
+	    	}
+        }
         /*-----------------------------------------------*/
         case StarObjectClass_toString :
         {
