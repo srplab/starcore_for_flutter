@@ -760,6 +760,14 @@ static gboolean ScriptCallBack_RESULT_Handler(struct StructOfScriptCallBack_Time
     return false;
 }
 
+static gboolean ScriptCallBack_FreeLocalFrame_RESULT_Handler(struct StructOfScriptCallBack_TimerHandlerArgs *Args)
+{
+    fl_method_channel_invoke_method(channel,"starobjectclass_scriptproc_freeLlocalframe",Args->call_arg,NULL,NULL,NULL);
+    fl_value_unref(Args->call_arg);
+    g_free(Args);
+    return false;
+}
+
 static VS_INT32 SRPObject_ScriptCallBack(void* L)
 {
     SetStarThreadWorkerBusy(VS_TRUE);
@@ -838,8 +846,23 @@ static VS_INT32 SRPObject_ScriptCallBack(void* L)
         return 0;
     }
     else {
+        if( IsNull(RetValue) == VS_TRUE ){
+            fl_value_unref(RetValue);
+            SetStarThreadWorkerBusy(VS_FALSE);
+            return 0;
+        }
+        FlValue *RetValueList = RetValue;
+        VS_CHAR* FrameTag = toString(fl_value_get_list_value(RetValueList,0));
+
         n = l_Service->LuaGetTop();
-        FlutterObjectToLua(l_Service, RetValue);
+        FlutterObjectToLua(l_Service, fl_value_get_list_value(RetValueList,1));
+
+        FlValue *cP_l = fl_value_new_list();
+        fl_value_append_take(cP_l,fromString(FrameTag));
+        struct StructOfScriptCallBack_TimerHandlerArgs *Args_l = g_new0(struct StructOfScriptCallBack_TimerHandlerArgs,1);
+        Args_l->call_arg = cP_l;
+        g_timeout_add(0,(GSourceFunc) ScriptCallBack_FreeLocalFrame_RESULT_Handler,(gpointer)Args_l);
+
         fl_value_unref(RetValue);
         SetStarThreadWorkerBusy(VS_FALSE);
         return l_Service->LuaGetTop() - n;
@@ -2324,7 +2347,7 @@ static VS_ULONG VSTHREADAPI Core_Thread(struct StructOfCoreThreadArgs *Call_Args
           break;
           case starcore_ThreadTick_MethodCall:
           {
-              SetStarThreadWorkerBusy(VS_TRUE);
+              /*SetStarThreadWorkerBusy(VS_TRUE);  need not, the caller will queue*/
               vs_mutex_lock(&starCoreThreadCallDeepSyncObject);
               starCoreThreadCallDeep++;
               vs_mutex_unlock(&starCoreThreadCallDeepSyncObject);
@@ -2346,7 +2369,7 @@ static VS_ULONG VSTHREADAPI Core_Thread(struct StructOfCoreThreadArgs *Call_Args
               Return_Args->method_call = message->call;
               g_timeout_add(0, (GSourceFunc)MainThread_MESSAGE_RESULT_Handler, (gpointer)Return_Args);
 #endif
-              SetStarThreadWorkerBusy(VS_FALSE);
+              /*SetStarThreadWorkerBusy(VS_FALSE);*/
           }
           break;
           case starcore_ThreadTick_Exit:
@@ -2514,7 +2537,7 @@ static VS_ULONG VSTHREADAPI Core_Worker_Thread(void* Call_Args)
         switch (message->MsgClass) {
         case starcore_ThreadTick_MethodCall:
         {
-            SetStarThreadWorkerBusy(VS_TRUE);
+            /*SetStarThreadWorkerBusy(VS_TRUE);  need not, the caller will queue*/
             vs_mutex_lock(&starCoreThreadCallDeepSyncObject);
             starCoreThreadCallDeep++;
             vs_mutex_unlock(&starCoreThreadCallDeepSyncObject);
@@ -2536,7 +2559,7 @@ static VS_ULONG VSTHREADAPI Core_Worker_Thread(void* Call_Args)
             Return_Args->method_call = message->call;
             g_timeout_add(0, (GSourceFunc)MainThread_MESSAGE_RESULT_Handler, (gpointer)Return_Args);
 #endif
-            SetStarThreadWorkerBusy(VS_FALSE);
+            /*SetStarThreadWorkerBusy(VS_FALSE);*/
         }
         break;
         case starcore_ThreadTick_Exit:
@@ -3168,7 +3191,6 @@ static FlValue* handleMethodCall_Do(FlMethodCall* method_call)
             ParaPkg->AsDict(VS_TRUE);
         }
         else {
-            return NULL;
         }
         VS_UUID ObjectID;
         BasicSRPInterface->CreateUuid(&ObjectID);

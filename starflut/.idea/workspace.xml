@@ -13,7 +13,7 @@
   <component name="CodeInsightWorkspaceSettings">
     <option name="optimizeImportsOnTheFly" value="true" />
   </component>
-  <component name="ExecutionTargetManager" SELECTED_TARGET="device_and_snapshot_combo_box_target[]" />
+  <component name="ExecutionTargetManager" SELECTED_TARGET="device_and_snapshot_combo_box_target[192.168.234.101:5555]" />
   <component name="ProjectId" id="1kJyJKp147M2XhH6Swyyw4dthev" />
   <component name="ProjectViewState">
     <option name="hideEmptyMiddlePackages" value="true" />
@@ -132,21 +132,25 @@
       <screen x="67" y="27" width="1851" height="861" />
     </state>
     <state x="1012" y="219" width="424" height="484" key="FileChooserDialogImpl/67.27.1851.861@67.27.1851.861" timestamp="1607584806203" />
-    <state width="902" height="252" key="GridCell.Tab.0.bottom" timestamp="1607674163873">
-      <screen x="67" y="27" width="1851" height="861" />
+    <state width="1478" height="296" key="GridCell.Tab.0.bottom" timestamp="1612493521742">
+      <screen x="0" y="0" width="1536" height="824" />
     </state>
+    <state width="1478" height="296" key="GridCell.Tab.0.bottom/0.0.1536.824@0.0.1536.824" timestamp="1612493521742" />
     <state width="902" height="252" key="GridCell.Tab.0.bottom/67.27.1851.861@67.27.1851.861" timestamp="1607674163873" />
-    <state width="902" height="252" key="GridCell.Tab.0.center" timestamp="1607674163871">
-      <screen x="67" y="27" width="1851" height="861" />
+    <state width="1478" height="296" key="GridCell.Tab.0.center" timestamp="1612493521739">
+      <screen x="0" y="0" width="1536" height="824" />
     </state>
+    <state width="1478" height="296" key="GridCell.Tab.0.center/0.0.1536.824@0.0.1536.824" timestamp="1612493521739" />
     <state width="902" height="252" key="GridCell.Tab.0.center/67.27.1851.861@67.27.1851.861" timestamp="1607674163871" />
-    <state width="902" height="252" key="GridCell.Tab.0.left" timestamp="1607674163871">
-      <screen x="67" y="27" width="1851" height="861" />
+    <state width="1478" height="296" key="GridCell.Tab.0.left" timestamp="1612493521739">
+      <screen x="0" y="0" width="1536" height="824" />
     </state>
+    <state width="1478" height="296" key="GridCell.Tab.0.left/0.0.1536.824@0.0.1536.824" timestamp="1612493521739" />
     <state width="902" height="252" key="GridCell.Tab.0.left/67.27.1851.861@67.27.1851.861" timestamp="1607674163871" />
-    <state width="902" height="252" key="GridCell.Tab.0.right" timestamp="1607674163872">
-      <screen x="67" y="27" width="1851" height="861" />
+    <state width="1478" height="296" key="GridCell.Tab.0.right" timestamp="1612493521739">
+      <screen x="0" y="0" width="1536" height="824" />
     </state>
+    <state width="1478" height="296" key="GridCell.Tab.0.right/0.0.1536.824@0.0.1536.824" timestamp="1612493521739" />
     <state width="902" height="252" key="GridCell.Tab.0.right/67.27.1851.861@67.27.1851.861" timestamp="1607674163872" />
     <state width="902" height="252" key="GridCell.Tab.1.bottom" timestamp="1607674165621">
       <screen x="67" y="27" width="1851" height="861" />
@@ -168,10 +172,10 @@
       <screen x="67" y="27" width="1851" height="861" />
     </state>
     <state x="397" y="75" key="SettingsEditor/67.27.1851.861@67.27.1851.861" timestamp="1607675334577" />
-    <state x="425" y="187" key="run.anything.popup" timestamp="1611306012657">
+    <state x="426" y="187" key="run.anything.popup" timestamp="1612331835902">
       <screen x="0" y="0" width="1536" height="824" />
     </state>
-    <state x="425" y="187" key="run.anything.popup/0.0.1536.824@0.0.1536.824" timestamp="1611306012657" />
+    <state x="426" y="187" key="run.anything.popup/0.0.1536.824@0.0.1536.824" timestamp="1612331835902" />
   </component>
   <component name="XDebuggerManager">
     <breakpoint-manager>

@@ -4,6 +4,21 @@ A new flutter plugin project, which supports flutter to interact with other scri
 
 starflut is based on "starcore-for-android" and "starfore-for-ios project". 
 
+## 1.0.0 version  2021/02/05
+
+* To link with the static frameworks for ios, add STARCORE_FRAMEWORK and STARCORE_FRAMEWORKPATH environment variables to the podspec
+* Fix the bug of StarSrvGroup.newParaPkg(null)
+* For object's "call" function, if the object is a python, lua or ruby function, then funcName should be null, and, when call class's construct function, funcName should be null
+* Add two functions "setEnv" and "getEnv" for Android
+* Delete "pushLocalFrame" and "popLocalFrame", and, add functions "newLocalFrame", "freeLocalFrame"
+* Add "moveTo" function to starflut object, such as StarServiceClass, StarObjectClass,..., which is used to move the object to other local frame
+* Modify the following functions: newParaPkg, createService, newBinBuf, getObject, getObjectEx, newObject, newRawProxy, importRawContext, allObject, restfulCall, add parameters "FrameTag", the FrameTag maybe null.
+* Add parameter "FrameTag" for object's callback function StarObjectScriptProc
+* Adds version constants  : Major_Version, Minor_Version, Build_Version, and string constant "Version" to Starflut
+* Adds gc function to Starflut: After running freeLocalFrame, the gc function may be called to release the cle object
+* upgrade cle to v3.7.6
+
+
 ## 0.9.5 version  2021/01/25
 
 * add functions for StarBinBufClass : setOffset, print, asString
@@ -169,6 +184,8 @@ Using environment variable to control the compiling process.
 >[v_STARCORE_EXPORTFUNCTIONNAME](#) : 'xxx,yyy'
 >[STARCORE_STATICLIBRARY](#) : name of static library, ex: if the name is libxxx.a, then here is 'xxx'
 >[STARCORE_STATICLIBRARYPATH](#) : the folder of the static library
+>[STARCORE_FRAMEWORK](#)         : the name of framework, ex: 'xxx,yyy'
+>[STARCORE_FRAMEWORKPATH](#)     : the folder of the static framework
 
 ```
 for example
@@ -285,7 +302,7 @@ StarSrvGroupClass SrvGroup = await Service["_ServiceGroup"];
 
 ```
 await SrvGroup.initRaw("python39", Service);
-StarObjectClass python = await Service.importRawContext("python", "", false, "");
+StarObjectClass python = await Service.importRawContext(null,"python", "", false, "");
 ```
 
 3.Run python file
@@ -303,25 +320,57 @@ API Interface:
 note: 
   !! important  
   !! for dart does not support destruct function of class, so the starobject must be freed manually, or else will cause memory leak
+  !!    newLocalFrame, freeLocalFrame and gc can be used to help releasing starobjects.
+
+  !! FrameTag may be null
 
   !! starflut must be run in main ui thread.
 
 Starflut:
-  ** for android and ios
   isAndroid            : static Future<bool> isAndroid() async
   getFactory           : static Future<StarCoreFactory> getFactory() async
   getDocumentPath      : static Future<String> getDocumentPath() async
+                       : andoid : "/data/data/"+activity.getPackageName()+"/files"
+                       : ios/macos: NSDocumentDirectory
+                       : others: reserved
   getResourcePath      : static Future<String> getResourcePath() async
-                       : for ios : [[NSBundle mainBundle] resourcePath]
+                       : for ios/macos : [[NSBundle mainBundle] resourcePath]
                        : for android : is same with getDocumentPath
+                       : for windows : the executable file path, where the share library under starcore folder located
+                       : for linux : the lib path, where the share library under starcore folder located
+  getAssetsPath         : static Future<String> getAssetsPath() async
+                       : for android : is same with getDocumentPath
+                       : for others : flutter assets path
 
   pushLocalFrame       : static void pushLocalFrame()
+                         start from 1.0.0, this function is invalid
   popLocalFrame        : static void popLocalFrame()
-                         note: when popLocalFrame is called, the starobject allocated from pushLocalFrame may be freed
-                               If starobject will be used after, it's lock function must be called.
+                          start from 1.0.0, this function is invalid
+  --v0.9.0
+  getPlatform          : static Future<int> getPlatform() async
+                         return value : starflut.ANDROID, IOS, WINDOWS, LINUX, MACOS, WEB
+
+  setEnv               : static Future<bool> setEnv(String Name,String Value) async
+
+  getEnv               : static Future<String> getEnv(String Name) async
+
+  loadLibrary          : static Future<bool> loadLibrary(String name) async
+                         load sharelibrary
+                         note: ios does not support this
+
+  --v1.0.0
+  newLocalFrame       :  static String newLocalFrame()
+                      :  return a FrameTag
+
+  freeLocalFrame       :  static void freeLocalFrame(String FrameTag)
+                         note: when freeLocalFrame is called, the starobject allocated in FrameTag may be freed
+                               If starobject will be used after this function, it's lock function must be called.
 
                        : StarSrvGroupClass instance always in root frame
                        : StarServiceClass instance returned from getService or initSimple always in root frame
+
+  gc                   : static Future<void> gc() async
+                       : After running freeLocalFrame, you can call the gc function to release the cle object
 
   ** for android
   getNativeLibraryDir  : static Future<String> getNativeLibraryDir() async
@@ -333,10 +382,12 @@ Starflut:
                        : srcRelatePath is the path fromm assets, may be null, if at assets's root
                        : desRelatePath is the path relative to "/data/data/"+activity.getPackageName()+"/files"
                        :               if null, the desRelatePath is "/data/data/"+activity.getPackageName()+"/files"
-  loadLibrary          : static Future<bool> loadLibrary(String name) async
-  getActivity          : static Future<StarObjectClass> getActivity() async
-                       : note: this function must be called after [await SrvGroup.initRaw("java",Service);]
+  getActivity          : static Future<StarObjectClass> getActivity(StarServiceClass service) async
+                       : note: this function must be called after the service is created
                          note: only valid for android
+
+  --v0.9.0
+  copyFileFromAssetsEx   : static Future<bool> copyFileFromAssetsEx(String name,String srcRelatePath,String desRelatePath,bool OverwriteIfExist) async
 
   ** for ios
   rubyInitExt          : static Future<String> rubyInitExt() async
@@ -345,9 +396,10 @@ Starflut:
 
 
 StarCoreBase
-  lock                 : void lock()                         
-                       : move the starobject from local frame to global frame, 
-                       : !!  important this object must be freed manually when not used.
+  lock                 : void lock({String FrameTag=null})
+                       : move the starobject from local frame to global frame, or to other local frame
+  moveTo               : void moveTo(String FrameTag)
+                       : same as lock if FrameTag = null
 
 StarCoreFactory:
   initCore             : Future<int> initCore(bool serverFlag,bool showMenuFlag,bool showClientWndFlag,bool sRPPrintFlag,String debugInterface,int debugPort,String clientInterface,int clientPort) async
@@ -372,18 +424,30 @@ StarCoreFactory:
   detachCurrentThread  : Future<void> detachCurrentThread() async
   coreHandle           : Future<int> coreHandle () async
 
+  --v0.6.0
+  releaseScriptGIL     : Future<void> releaseScriptGIL() async
+  captureScriptGIL     : Future<void> captureScriptGIL() async
+
+  --v0.9.0
+  setShareLibraryPath  : Future<void> setShareLibraryPath(String path) async
+                       : note: macos, windows, linux
+                       : the location of script interface share library, such as : libstarpy.dylib/so...
+
 StarSrvGroupClass :
 
   getString            : Future<String> getString() async
                          = toString
 
-  createService        : Future<StarServiceClass> createService(String servicePath,String serviceName,String rootPass,int frameInterval,int netPkgSize,int uploadPkgSize,int downloadPkgSize,int dataUpPkgSize,int dataDownPkgSize,String derviceID) async
+  createService        : Future<StarServiceClass> createService(String FrameTag,String servicePath,String serviceName,String rootPass,int frameInterval,int netPkgSize,int uploadPkgSize,int downloadPkgSize,int dataUpPkgSize,int dataDownPkgSize,String derviceID) async
+                       : FrameTag maybe null, or the return value from newLocalFrame
   getService           : Future<StarServiceClass> getService(String username, String userpassword) async
   clearService         : Future<void> clearService() async
-  newParaPkg           : Future<StarParaPkgClass> newParaPkg(Object args) async , example: StarSrvGroup.newParaPkg(['aaaa',234,[345]])
-                       : args maybe List or Map 
-  newBinBuf            : Future<StarBinBufClass> newBinBuf() async
+  newParaPkg           : Future<StarParaPkgClass> newParaPkg(String FrameTag,Object args) async , example: StarSrvGroup.newParaPkg(['aaaa',234,[345]])
+                       : args maybe List or Map
+                       : FrameTag maybe null, or the return value from newLocalFrame
+  newBinBuf            : Future<StarBinBufClass> newBinBuf(String FrameTag) async
   //newSXml              : Future<StarSXmlClass> newSXml() async
+                       : FrameTag maybe null, or the return value from newLocalFrame
   isObject             : bool isObject(Object which)
   isParaPkg            : bool isParaPkg(Object which)
   isBinBuf             : bool isBinBuf(Object which)
@@ -420,22 +484,31 @@ StarServiceClass:
 
   []                   : Future<Object> operator [](Object object) async
                        : == Get : "_Name"  "_ServiceGroup" "_ID"
-  getObject            : Future<StarObjectClass> getObject (String objectName) async          
-  getObjectEx          : Future<StarObjectClass> getObjectEx (String objectID) async  
-  newObject            : Future<StarObjectClass> newObject (List args) async       
-                       : == New    
+  getObject            : Future<StarObjectClass> getObject (String FrameTag,String objectName) async
+                       : FrameTag maybe null, or the return value from newLocalFrame
+  getObjectEx          : Future<StarObjectClass> getObjectEx (String FrameTag,String objectID) async
+                       : FrameTag maybe null, or the return value from newLocalFrame
+  newObject            : Future<StarObjectClass> newObject (String FrameTag,List args) async
+                       : FrameTag maybe null, or the return value from newLocalFrame
+                       : == "_New()"
   runScript            : Future<List> runScript (String scriptInterface,String scriptBuf,String moduleName,String workDirectory) async
   runScriptEx          : Future<List> runScriptEx (String scriptInterface,StarBinBufClass binBuf,String moduleName,String workDirectory) async
   doFile               : Future<List> doFile (String scriptInterface,String fileName,String workDirectory) async
   doFileEx             : Future<List> doFileEx (String scriptInterface,String fileName,String workDirectory,String moduleName) async
   isServiceRegistered  : Future<bool> isServiceRegistered () async
   checkPassword        : Future<void> checkPassword (bool flag) async
-  newRawProxy          : Future<StarObjectClass> newRawProxy (String scriptInterface,StarObjectClass attachObject,String attachFunction,String proyInfo,int proxyType) async
-  importRawContext     : Future<StarObjectClass> importRawContext (String scriptInterface,String contextName,bool isClass,String contextInfo) async
+  newRawProxy          : Future<StarObjectClass> newRawProxy (String FrameTag,String scriptInterface,StarObjectClass attachObject,String attachFunction,String proyInfo,int proxyType) async
+                       : FrameTag maybe null, or the return value from newLocalFrame
+  importRawContext     : Future<StarObjectClass> importRawContext (String FrameTag,String scriptInterface,String contextName,bool isClass,String contextInfo) async
+                       : FrameTag maybe null, or the return value from newLocalFrame
   getLastError         : Future<int> getLastError () async
   getLastErrorInfo     : Future<String> getLastErrorInfo () async
 
-
+  --v0.6.0
+  allObject            : Future<List> allObject(String FrameTag) async
+                       : FrameTag maybe null, or the return value from newLocalFrame
+  restfulCall          : Future<List> restfulCall (String FrameTag,String url, String opCode, String jsonString) async
+                       : FrameTag maybe null, or the return value from newLocalFrame
 
 StarParaPkg:
   getString            : Future<String> getString() async
@@ -452,6 +525,7 @@ StarParaPkg:
                        : == Set
   build                : Future<StarParaPkgClass> build (Object args) async
                        : args maybe List or Map
+                       : return self
   clear                : Future<StarParaPkgClass> clear () async
   appendFrom           : Future<bool> appendFrom (StarParaPkgClass srcParaPkg) async  
   free                 : Future<void> free () async
@@ -461,7 +535,16 @@ StarParaPkg:
   isDict               : Future<bool> isDict () async
   fromJSon             : Future<bool> fromJSon (String jsonstring) async
   toJSon               : Future<String> toJSon () async
-  toTuple              : Future<Object> toTuple () async                 
+  toTuple              : Future<Object> toTuple () async     
+
+  --v0.6.0
+  equals               : Future<bool> equals (StarParaPkgClass srcParaPkg) async
+  v                    : Future<String> get ValueStr async
+
+  --v0.9.6
+  fromTuple            : Future<StarParaPkgClass> fromTuple (Object args) async
+                       : args maybe List or Map
+                       : return self
 
 StarBinBuf :
   getString            : Future<String> getString() async
@@ -478,6 +561,12 @@ StarBinBuf :
   dispose              : Future<void> dispose () async
   releaseOwner         : Future<void> releaseOwner () async
 
+  --v0.9.5
+  setOffset              : Future<bool> setOffset (int Offset) async
+  print                  : Future<void> print (String Arg) async
+  asString               : Future<String> asString() async
+                         : note : return the buf as a string
+
 StarObject :
   getString            : Future<String> getString() async
                          = toString
@@ -489,8 +578,11 @@ StarObject :
   setValue             : Future<void> setValue(Object indexOrName,Object value) async
                          = Set : "_Name"
   call                 : Future<Object> call (String funcName,List args) async
-                       : note:  !!! In callback function, do not call any starflut functions
+                       : note:  !!! In callback function, do not call any starflut functions, this limition has been removed from 0.9.5
+                       : note:  if the object is python, lua or ruby function, funcName should be null.  0.9.6
+                       : note:  when call class's construct function, funcName should be null.  0.9.6
   newObject            : Future<StarObjectClass> newObject (List args) async
+                       : = "_New()"
   free                 : Future<void> free () async
   dispose              : Future<void> dispose () async
   hasRawContext        : Future<bool> hasRawContext () async
@@ -500,6 +592,16 @@ StarObject :
   getLastErrorInfo     : Future<String> getLastErrorInfo () async
   releaseOwnerEx       : Future<void> releaseOwnerEx () async
   regScriptProcP       : Future<void> regScriptProcP(String scriptName,StarObjectScriptProc callBack) async
+
+  --v0.6.0
+  instNumber           : Future<int> instNumber () async
+  changeParent         : Future<void> changeParent (StarObjectClass parentObject,String queueName) async
+  jsonCall             : Future<String> jsonCall (String jsonString) async
+
+  --v0.9.0
+  active               : Future<bool> active () async
+  deActive             : Future<void> deActive () async
+  isActive             : Future<bool> isActive () async
 ```
 
 

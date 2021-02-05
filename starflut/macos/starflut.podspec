@@ -4,7 +4,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'starflut'
-  s.version          = '0.9.5'
+  s.version          = '1.0.0'
   s.summary          = 'bridge for flutter interact with other programming languages'
   s.description      = <<-DESC
 bridge for flutter interact with other programming languages, such as c/c++ lua, python, ruby, golang, rust, etc.
@@ -20,7 +20,11 @@ bridge for flutter interact with other programming languages, such as c/c++ lua,
   s.resources = ['starcore/*']
   s.libraries = 'starlib'
   s.compiler_flags = '-DENV_MACOS -DENV_M64'
-  s.xcconfig = {'HEADER_SEARCH_PATHS' => Dir::pwd + '/include/starcore','LIBRARY_SEARCH_PATHS' => Dir::pwd}
+
+  current_path_ori = __FILE__
+  current_path = current_path_ori[0..current_path_ori.rindex("/")-1]    # Dir::pwd
+
+  s.xcconfig = {'HEADER_SEARCH_PATHS' => current_path + '/include/starcore','LIBRARY_SEARCH_PATHS' => current_path}
 
   s.platform = :osx, '10.11'
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES' }

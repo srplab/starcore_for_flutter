@@ -213,6 +213,7 @@ static HWND hMainWnd = NULL;
 #define MAINTHEAD_WND_MESSAGE_RESULT WM_USER + 1
 #define MAINTHEAD_WND_MESSAGE_CALLBACK WM_USER + 2
 #define MAINTHEAD_WND_MESSAGE_SCRIPTCALL WM_USER + 3
+#define MAINTHEAD_WND_MESSAGE_SCRIPTCALL_FREELOCALFRAME WM_USER + 4
 
 #if 0
 EncodableValue b(true); 
@@ -840,8 +841,24 @@ static VS_INT32 SRPObject_ScriptCallBack(void* L)
         return 0;
     }
     else {
+        if (RetValue->IsNull() == true) {
+            delete RetValue;
+            SetStarThreadWorkerBusy(VS_FALSE);
+            return 0;
+        }
+        const auto* RetValueList = std::get_if<flutter::EncodableList>(RetValue);
+        ClassOfStarFlutAnsiString FrameTag  = toString((&(*RetValueList)[0]));
         n = l_Service->LuaGetTop();
-        FlutterObjectToLua(l_Service, RetValue);
+        FlutterObjectToLua(l_Service, &(*RetValueList)[1]);
+        {
+            flutter::EncodableList cP_l ;
+            v_temp = fromString(FrameTag.AnsiCharPtr);
+            cP_l.push_back(*v_temp);
+            delete v_temp;
+
+            flutter::EncodableValue *call_arg_l = new flutter::EncodableValue(cP_l);
+            ::PostMessage(hMainWnd, MAINTHEAD_WND_MESSAGE_SCRIPTCALL_FREELOCALFRAME, 0, (LPARAM)call_arg_l);
+        }
         delete RetValue;
         SetStarThreadWorkerBusy(VS_FALSE);
         return l_Service->LuaGetTop() - n;
@@ -2127,7 +2144,7 @@ LRESULT CALLBACK MainThread_Wnd_WndProc(HWND hWnd, UINT message, WPARAM wParam, 
     {
         struct StructOfMainThreadTimerHandlerArgs* Args = (struct StructOfMainThreadTimerHandlerArgs* )lParam;
         if(Args->value == NULL)
-            Args->result->Success(nullptr);
+            Args->result->Success(EncodableValue());
         else {
             Args->result->Success(*Args->value);
             delete Args->value;
@@ -2149,6 +2166,14 @@ LRESULT CALLBACK MainThread_Wnd_WndProc(HWND hWnd, UINT message, WPARAM wParam, 
         std::string MethodName = "starobjectclass_scriptproc";
         std::unique_ptr<MethodResultFunctions<flutter::EncodableValue>> result = std::make_unique<MethodResultFunctions<flutter::EncodableValue>>(MESSAGE_SCRIPTCALL_Success, MESSAGE_SCRIPTCALL_Error, MESSAGE_SCRIPTCALL_NotImplemented);
         channel->InvokeMethod(MethodName, std::make_unique<flutter::EncodableValue>(*(flutter::EncodableValue*)lParam), std::move(result));
+    }
+    break;
+    case MAINTHEAD_WND_MESSAGE_SCRIPTCALL_FREELOCALFRAME :
+    {
+        std::string MethodName = "starobjectclass_scriptproc_freeLlocalframe";
+        flutter::EncodableValue* ev = (flutter::EncodableValue*)lParam;
+        channel->InvokeMethod(MethodName, std::make_unique<flutter::EncodableValue>(*ev), nullptr);
+        delete ev;
     }
     break;
 
@@ -2480,7 +2505,7 @@ static VS_ULONG VSTHREADAPI Core_Thread(struct StructOfCoreThreadArgs *Call_Args
           break;
           case starcore_ThreadTick_MethodCall:
           {
-              SetStarThreadWorkerBusy(VS_TRUE);
+              /*SetStarThreadWorkerBusy(VS_TRUE);  need not, the caller will queue*/
               vs_mutex_lock(&starCoreThreadCallDeepSyncObject);
               starCoreThreadCallDeep++;
               vs_mutex_unlock(&starCoreThreadCallDeepSyncObject);
@@ -2504,7 +2529,7 @@ static VS_ULONG VSTHREADAPI Core_Thread(struct StructOfCoreThreadArgs *Call_Args
 #endif
               ::PostMessage(hMainWnd, MAINTHEAD_WND_MESSAGE_RESULT, 0, (LPARAM)Return_Args);
 #endif
-              SetStarThreadWorkerBusy(VS_FALSE);
+              /*SetStarThreadWorkerBusy(VS_FALSE);*/
           }
           break;
           case starcore_ThreadTick_Exit:
@@ -2666,7 +2691,7 @@ static VS_ULONG VSTHREADAPI Core_Worker_Thread(void* Call_Args)
         switch (message->MsgClass) {
         case starcore_ThreadTick_MethodCall:
         {
-            SetStarThreadWorkerBusy(VS_TRUE);
+            /*SetStarThreadWorkerBusy(VS_TRUE);  need not, the caller will queue*/
             vs_mutex_lock(&starCoreThreadCallDeepSyncObject);
             starCoreThreadCallDeep++;
             vs_mutex_unlock(&starCoreThreadCallDeepSyncObject);
@@ -2690,7 +2715,7 @@ static VS_ULONG VSTHREADAPI Core_Worker_Thread(void* Call_Args)
 #endif
             ::PostMessage(hMainWnd, MAINTHEAD_WND_MESSAGE_RESULT, 0, (LPARAM)Return_Args);
 #endif
-            SetStarThreadWorkerBusy(VS_FALSE);
+            /*SetStarThreadWorkerBusy(VS_FALSE);*/
         }
         break;
         case starcore_ThreadTick_Exit:
@@ -3322,7 +3347,6 @@ static flutter::EncodableValue* handleMethodCall_Do(std::string method, flutter:
             ParaPkg->AsDict(VS_TRUE);
         }
         else {
-            return NULL;
         }
         VS_UUID ObjectID;
         BasicSRPInterface->CreateUuid(&ObjectID);

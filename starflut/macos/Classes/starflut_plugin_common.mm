@@ -1627,12 +1627,33 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
     remove_WaitResult(w_tag);
     SRPControlInterface->SRPLock();
     l_Service -> SetRetCode(Object,VSRCALL_OK);
-    if( RetValue == nil ){
+    if( RetValue == nil || [RetValue isKindOfClass:[NSNull class]] ){
         SetStarThreadWorkerBusy(VS_FALSE);
         return 0;
     }else{
+        NSArray *RetValue_List = (NSArray *)RetValue;
+        VS_CHAR *FrameTag = toString([RetValue_List objectAtIndex:0]);
         n = l_Service ->LuaGetTop();
-        FlutterObjectToLua( l_Service, RetValue);
+        FlutterObjectToLua( l_Service, [RetValue_List objectAtIndex:1]);
+
+        NSMutableArray *cP_l = [[NSMutableArray alloc] init];
+        [cP_l addObject:fromString(FrameTag)];
+        dispatch_async(dispatch_get_main_queue(), ^{
+                /*
+                 - Parameters:
+                 - method: The name of the method to invoke.
+                 - arguments: The arguments. Must be a value supported by the codec of this
+                 channel.
+                 - result: A callback that will be invoked with the asynchronous result.
+                 The result will be a `FlutterError` instance, if the method call resulted
+                 in an error on the Flutter side. Will be `FlutterMethodNotImplemented`, if
+                 the method called was not implemented on the Flutter side. Any other value,
+                 including `nil`, should be interpreted as successful results.
+                 */
+                [channel invokeMethod:@"starobjectclass_scriptproc_freeLlocalframe" arguments:cP_l result:nil];
+                }
+                );
+
         SetStarThreadWorkerBusy(VS_FALSE);
         return l_Service ->LuaGetTop()-n;
     }
@@ -1955,7 +1976,7 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
                             switch( message->messageID){
                             case starcore_ThreadTick_MethodCall :
                             {
-                                SetStarThreadWorkerBusy(VS_TRUE);
+                                /*SetStarThreadWorkerBusy(VS_TRUE);  need not, the caller will queue*/
                                 NSNumber *index = [starcoreCmdMap objectForKey:call.method];
                                 SRPControlInterface->SRPLock();
                                 id value = [self handleMethodCall_Do:message->call];
@@ -1964,7 +1985,7 @@ static VS_INT32 SRPObject_ScriptCallBack(void *L)
                                 dispatch_async(dispatch_get_main_queue(), ^{
                                     message->result(value);  /*--run in ui thread--*/
                                 });
-                                SetStarThreadWorkerBusy(VS_FALSE);
+                                /*SetStarThreadWorkerBusy(VS_FALSE);*/
                             }
                             break;
                             case starcore_ThreadTick_Exit :
@@ -2189,7 +2210,7 @@ static VSCore_TermProc  VSTermProc;
                             break;
                         case starcore_ThreadTick_MethodCall :
                         {
-                            SetStarThreadWorkerBusy(VS_TRUE);
+                            /*SetStarThreadWorkerBusy(VS_TRUE);  need not, the caller will queue*/
                             NSNumber *index = [starcoreCmdMap objectForKey:call.method];
                             SRPControlInterface->SRPLock();
                             id value = [self handleMethodCall_Do:message->call];
@@ -2198,7 +2219,7 @@ static VSCore_TermProc  VSTermProc;
                             dispatch_async(dispatch_get_main_queue(), ^{
                                 message->result(value);  /*--run in ui thread--*/
                             });
-                            SetStarThreadWorkerBusy(VS_FALSE);
+                            /*SetStarThreadWorkerBusy(VS_FALSE);*/
                         }
                             break;
                         case starcore_ThreadTick_Exit :
@@ -2725,7 +2746,6 @@ static VSCore_TermProc  VSTermProc;
                 }
                 ParaPkg ->AsDict(VS_TRUE);
             }else{
-                return nil;
             }
             NSString *CleObjectID = [NSString stringWithFormat:@"%@%@",StarParaPkgPrefix,[[NSUUID UUID] UUIDString]];
             [CleObjectMap setObject:fromPointer(ParaPkg) forKey:CleObjectID];

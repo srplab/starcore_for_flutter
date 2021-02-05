@@ -335,6 +335,7 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
   final int starcore_sendResult_MessageID = 0;
   final int starcore_msgCallBack_MessageID = 1;
   final int starobjecrclass_ScriptCallBack_MessageID = 2;
+  final int starobjecrclass_ScriptCallBack_FreeLocalFrame_MessageID = 3;
 
   public void StarflutPlugin_Init() {
       CleObjectMap = new HashMap<String, Object>();
@@ -434,7 +435,9 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
               public void notImplemented() {}
             });           
             break;
-
+           case starobjecrclass_ScriptCallBack_FreeLocalFrame_MessageID :
+            channel.invokeMethod("starobjectclass_scriptproc_freeLlocalframe" ,msg.obj, null);
+            break;
           }
         }
     };
@@ -775,7 +778,7 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
                             public void handleMessage(Message msg) {
                                 switch (msg.what) {
                                     case starcore_ThreadTick_MethodCall: {
-                                        SetStarThreadWorkerBusy(true);
+                                        /*SetStarThreadWorkerBusy(true);  need not, the caller will queue*/
                                         /*--object : [MethodCall,Result]*/
                                         Object[] args = (Object[]) msg.obj;
                                         synchronized (starCoreThreadCallDeepSyncObject) {
@@ -789,7 +792,7 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
                                         message1.what = starcore_sendResult_MessageID;
                                         message1.obj = new Object[]{args[1], result};
                                         mainHandler.sendMessage(message1);
-                                        SetStarThreadWorkerBusy(false);
+                                        /*SetStarThreadWorkerBusy(false);*/
                                     }
                                     break;
                                 }
@@ -912,11 +915,18 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
         }
         break;
         case "starcore_setEnv" :{
-            result.success(false);
+            ArrayList<Object> plist = (ArrayList<Object>)call.arguments;
+            starcore._SRPLock();
+            boolean Result = starcore._SetEnv((String)plist.get(0),(String)plist.get(1));
+            starcore._SRPUnLock();
+            result.success(Result);
         }
         break;
         case "starcore_getEnv" :{
-            result.success("");
+            starcore._SRPLock();
+            String Result = starcore._GetEnv((String)call.arguments);
+            starcore._SRPUnLock();
+            result.success(Result);
         }
         break;
         case "starcore_init" :{
@@ -945,7 +955,7 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
                   break;
                 case starcore_ThreadTick_MethodCall :
                   {
-                      SetStarThreadWorkerBusy(true);
+                      /*SetStarThreadWorkerBusy(true);  need not, the caller will queue*/
                     /*--object : [MethodCall,Result]*/
                     Object[] args = (Object[])msg.obj;
                     synchronized(starCoreThreadCallDeepSyncObject){
@@ -959,7 +969,7 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
                     message1.what = starcore_sendResult_MessageID;
                     message1.obj = new Object[]{args[1],result};
                     mainHandler.sendMessage(message1);
-                      SetStarThreadWorkerBusy(false);
+                    /*SetStarThreadWorkerBusy(false);*/
                   }
                   break;                                                                
                 }
@@ -1509,6 +1519,10 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
               if( l_ParaPkg != null )
                 l_ParaPkg._AsDict(true);
               starcore._SRPUnLock();
+            }else{
+                starcore._SRPLock();
+                l_ParaPkg = l_SrvGroup._NewParaPkg();
+                starcore._SRPUnLock();
             }
             if( l_ParaPkg != null ){
               String CleObjectID = StarParaPkgPrefix+UUID.randomUUID().toString();
@@ -3027,15 +3041,36 @@ public class StarflutPlugin implements FlutterPlugin, ActivityAware, MethodCallH
                   remove_WaitResult(w_tag);
                   starcore._SRPLock();
 
-                  //--process output result
+                  if( result == null)
+                      return null;
+                  ArrayList<Object> result_list = (ArrayList<Object>)result;
+                  String FrameID = (String)result_list.get(0);
+                  result = result_list.get(1);
+                    //--process output result
                     if( result instanceof ArrayList<?> ){
                         Object[] pResult = processInputArgs((ArrayList<Object>)result);
+
+                        ArrayList<Object> cP_l = new ArrayList<Object>();
+                        cP_l.add(FrameID);
+                        message1 = mainHandler.obtainMessage();
+                        message1.what = starobjecrclass_ScriptCallBack_FreeLocalFrame_MessageID;
+                        message1.obj = cP_l;
+                        mainHandler.sendMessage(message1);
+
                         SetStarThreadWorkerBusy(false);
                         return pResult;
                     }else {
                         ArrayList<Object> b_Result = new ArrayList<Object>();
                         b_Result.add(result);
                         Object[] pResult = processInputArgs(b_Result);
+
+                        ArrayList<Object> cP_l = new ArrayList<Object>();
+                        cP_l.add(FrameID);
+                        message1 = mainHandler.obtainMessage();
+                        message1.what = starobjecrclass_ScriptCallBack_FreeLocalFrame_MessageID;
+                        message1.obj = cP_l;
+                        mainHandler.sendMessage(message1);
+
                         SetStarThreadWorkerBusy(false);
                         return pResult[0];
                     }

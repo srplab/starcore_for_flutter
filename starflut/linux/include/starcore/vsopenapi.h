@@ -14,7 +14,16 @@ extern "C"{
 
 /*--define version of starcore--*/
 #define VS_MAINVERSION  3
-#define VS_SUBVERSION   117   /* 3.7.5  high four bits are subversion, and lower four bits are release version */
+#define VS_SUBVERSION   118   /* 3.7.6  high four bits are subversion, and lower four bits are release version */
+
+                            /*
+                               3.7.6
+							     1. Solve the bug that the number of parameters is sometimes one more when calling native script functions 
+								 2. Resolve python warning message : DeprecationWarning: PY_SSIZE_T_CLEAN will be required for '#' formats
+								 3. Modify the search path of the script interface module, the order is: current path> ShareLibrary path> starcore installation path 
+								 4. Script function _Call/_SyncCall, the function name can be NULL. At this time, the function name is automatically set to "_StarCall", which can be used when the object is a native function or when the object's constructor is called. 
+
+						    */
 
                             /*
                                3.7.5
@@ -220,7 +229,7 @@ extern "C"{
                                2.0.5 Release for all platform
                             */
 #define VS_BUILDVERSION   260 /*0x104*/
-#define VS_VERSIONSTRING "3.7.5"
+#define VS_VERSIONSTRING "3.7.6"
 
 #define VS_OBJECTINITFUNCNAME "_StarCall"    /* function name for init instance of class object*/
 #define VS_OBJECTFUNCNAME_CALLSUPER "_SuperStar_"

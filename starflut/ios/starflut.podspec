@@ -4,7 +4,7 @@
 #
 Pod::Spec.new do |s|
   s.name             = 'starflut'
-  s.version          = '0.9.5'
+  s.version          = '1.0.0'
   s.summary          = 'bridge for flutter interact with other programming languages'
   s.description      = <<-DESC
 bridge for flutter interact with other programming languages, such as c/c++ lua, python, ruby, golang, rust, etc.
@@ -43,8 +43,18 @@ bridge for flutter interact with other programming languages, such as c/c++ lua,
   v_STARCORE_STATICLIBRARY = ENV['STARCORE_STATICLIBRARY']           # name of static library, ex: if the name is libxxx.a, then here is 'xxx'
   v_STARCORE_STATICLIBRARYPATH = ENV['STARCORE_STATICLIBRARYPATH']   # 'the folder of the static library
 
+  #framework name and path
+  V_STARCORE_FRAMEWORK = ENV['STARCORE_FRAMEWORK']           # the name of framework, ex: 'xxx,yyy'
+  V_STARCORE_FRAMEWORKPATH = ENV['STARCORE_FRAMEWORKPATH']   # 'the folder of the static framework
+
+  if (V_STARCORE_FRAMEWORK != nil) && (V_STARCORE_FRAMEWORK.length != 0 ) then
+    s.framework = V_STARCORE_FRAMEWORK
+  end
 
   starcore_path =  v_STARCORE_PATH   # such as  '/Users/srplab/Desktop', must use absolute path
+
+  current_path_ori = __FILE__
+  current_path = current_path_ori[0..current_path_ori.rindex("/")-1]    # Dir::pwd
 
   starcore_moduleexport_define = ''
   starcore_moduleexport_call = ''
@@ -89,8 +99,9 @@ bridge for flutter interact with other programming languages, such as c/c++ lua,
 
   compiler_flags = '-Wno-unused-function -DENV_IOS' + ' -DENV_MODULEEXPORT='+starcore_moduleexport_define + ' -DENV_MODULECALL='+starcore_moduleexport_call
   link_flags = 'iconv','stdc++','starcore'  # need linked with libstarcore.a
-  header_flags = "$(inherited) " + Dir::pwd+"/Classes " + starcore_path+'/starcore_for_ios/include'
+  header_flags = "$(inherited) " + current_path+"/Classes " + starcore_path+'/starcore_for_ios/include'
   library_flags = "$(inherited) " + starcore_path+'/starcore_for_ios'
+  framework_flags = "$(inherited) "
 
   #python config
   if (v_STARCORE_PYTHONVERSION != nil) && (v_STARCORE_PYTHONVERSION.length != 0) && (v_STARCORE_PYTHONCOREPATH != nil) && (v_STARCORE_PYTHONCOREPATH.length != 0 ) then
@@ -98,27 +109,27 @@ bridge for flutter interact with other programming languages, such as c/c++ lua,
     link_flags =  link_flags + ['sqlite3','ssl','crypto']
     if( v_STARCORE_PYTHONVERSION == "3.9" ) then
         link_flags =  link_flags + ['star_python39','python3.9']
-        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.9.zip'+' '+Dir::pwd+'/python3.9.zip'
+        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.9.zip'+' '+current_path+'/python3.9.zip'
         s.resource = ['python3.9.zip']
     elsif( v_STARCORE_PYTHONVERSION == "3.8" ) then
         link_flags =  link_flags + ['star_python38','python3.8']
-        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.8.zip'+' '+Dir::pwd+'/python3.8.zip'
+        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.8.zip'+' '+current_path+'/python3.8.zip'
         s.resource = ['python3.8.zip']
     elsif( v_STARCORE_PYTHONVERSION == "3.7" ) then
         link_flags =  link_flags + ['star_python37','python3.7m']
-        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.7.zip'+' '+Dir::pwd+'/python3.7.zip'
+        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.7.zip'+' '+current_path+'/python3.7.zip'
         s.resource = ['python3.7.zip']
     elsif( v_STARCORE_PYTHONVERSION == "3.6" ) then
         link_flags =  link_flags + ['star_python36','python3.6m']
-        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.6.zip'+' '+Dir::pwd+'/python3.6.zip'
+        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.6.zip'+' '+current_path+'/python3.6.zip'
         s.resource = ['python3.6.zip']
     elsif( v_STARCORE_PYTHONVERSION == "3.5" ) then
         link_flags =  link_flags + ['star_python35','python3.5m']
-        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.5.zip'+' '+Dir::pwd+'/python3.5.zip'
+        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.5.zip'+' '+current_path+'/python3.5.zip'
         s.resource = ['python3.5.zip']
     elsif( v_STARCORE_PYTHONVERSION == "2.7" ) then
         link_flags =  link_flags + ['starpy','python2.7']
-        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python2.7.zip'+' '+Dir::pwd+'/python2.7.zip'
+        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python2.7.zip'+' '+current_path+'/python2.7.zip'
         s.resource = ['python2.7.zip']
     end
     library_flags = library_flags + ' '+ v_STARCORE_PYTHONCOREPATH
@@ -150,9 +161,15 @@ bridge for flutter interact with other programming languages, such as c/c++ lua,
     end
   end
 
+  if (V_STARCORE_FRAMEWORKPATH != nil) && (V_STARCORE_FRAMEWORKPATH.length != 0 ) then
+    V_STARCORE_FRAMEWORKPATH.split(',').each do |name|
+      framework_flags = framework_flags + ' '+ name;
+    end
+  end
+
   s.compiler_flags = compiler_flags
   s.ios.library = link_flags
-  s.xcconfig = {'HEADER_SEARCH_PATHS' => header_flags,'LIBRARY_SEARCH_PATHS' => library_flags }
+  s.xcconfig = {'HEADER_SEARCH_PATHS' => header_flags,'LIBRARY_SEARCH_PATHS' => library_flags, 'FRAMEWORK_SEARCH_PATHS' => framework_flags}
 
   # Flutter.framework does not contain a i386 slice.
   s.pod_target_xcconfig = { 'DEFINES_MODULE' => 'YES', 'EXCLUDED_ARCHS[sdk=iphonesimulator*]' => 'i386' }
