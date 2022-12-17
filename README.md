@@ -4,6 +4,17 @@ A new flutter plugin project, which supports flutter to interact with other scri
 
 starflut is based on "starcore-for-android" and "starfore-for-ios project".
 
+# Get Started
+
+To import this null safe version of starflut , add in pubspec.yaml
+
+```pubspec
+starflut:
+  git:
+    url: https://github.com/rohitsangwan01/starcore_for_flutter.git
+    ref: null_safe
+```
+
 ### 1. Get source code
 
 ```sh
