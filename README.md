@@ -2,83 +2,7 @@
 
 A new flutter plugin project, which supports flutter to interact with other scripting languages such as python, java, ruby, golang, rust, etc. It is easy to use, supports android and ios platform.
 
-starflut is based on "starcore-for-android" and "starfore-for-ios project". 
-
-## 1.0.0 version  2021/02/05
-
-* To link with the static frameworks for ios, add STARCORE_FRAMEWORK and STARCORE_FRAMEWORKPATH environment variables to the podspec
-* Fix the bug of StarSrvGroup.newParaPkg(null)
-* For object's "call" function, if the object is a python, lua or ruby function, then funcName should be null, and, when call class's construct function, funcName should be null
-* Add two functions "setEnv" and "getEnv" for Android
-* Delete "pushLocalFrame" and "popLocalFrame", and, add functions "newLocalFrame", "freeLocalFrame"
-* Add "moveTo" function to starflut object, such as StarServiceClass, StarObjectClass,..., which is used to move the object to other local frame
-* Modify the following functions: newParaPkg, createService, newBinBuf, getObject, getObjectEx, newObject, newRawProxy, importRawContext, allObject, restfulCall, add parameters "FrameTag", the FrameTag maybe null.
-* Add parameter "FrameTag" for object's callback function StarObjectScriptProc
-* Adds version constants  : Major_Version, Minor_Version, Build_Version, and string constant "Version" to Starflut
-* Adds gc function to Starflut: After running freeLocalFrame, the gc function may be called to release the cle object
-* upgrade cle to v3.7.6
-
-
-## 0.9.5 version  2021/01/25
-
-* add functions for StarBinBufClass : setOffset, print, asString
-* enable call starflut functions in callback
-
-
-## 0.9.0 version  2021/01/13
-
-* support ios, android, and desktop( windows, linux, macos )
-* based on starcore 3.7.5
-* support python 3.7,3.8,3.9
-* Newly added API Interface:
-
-> Starflut:
-  >>[getPlatform](#)          : static Future<int> getPlatform() async, note:return value : starflut.ANDROID, IOS, WINDOWS, LINUX, MACOS, WEB
-  
-  >>[setEnv](#)               : static Future<bool> setEnv(String Name,String Value) async,note: android does not support this
-  
-  >>[getEnv](#)               : static Future<String> getEnv(String Name) async,note: android does not support this
-  
-  >>[loadLibrary](#)          : static Future<bool> loadLibrary(String name) async,load sharelibrarynote: ios does not support this
-  
-  >>[copyFileFromAssetsEx](#) : static Future<bool> copyFileFromAssetsEx(String name,String srcRelatePath,String desRelatePath,bool OverwriteIfExist) async
-
-> StarCoreFactory:
-  >>[setShareLibraryPath](#)  : Future<void> setShareLibraryPath(String path) async, note: macos, windows, linux. the location of script interface share library, such as : libstarpy.dylib/so...
-
-> StarObject:
-  >>[active](#)    : Future<bool> active () async
-  
-  >>[deActive](#)  : Future<void> deActive () async
-  
-  >>[isActive](#)  : Future<bool> isActive () async
-
-## 0.6.0 version  2019/08/01
-
-* support starcore 3.5.0
-* support python 3.7
-* Newly added API Interface:
-> StarServiceClass:
-  >> [allObject](#)            : Future<List> allObject() async 
-  
-  >> [restfulCall](#)          : Future<List> restfulCall (String url, String opCode, String jsonString) async
-
-> StarParaPkg:
-  >> [equals](#)               : Future<bool> equals (StarParaPkgClass srcParaPkg) async
-  
-  >> [v](#)                    : Future<String> get ValueStr async
-
-> StarObject :
-  >> [instNumber](#)           : Future<int> instNumber () async
-  
-  >> [jsonCall](#)             : Future<String> jsonCall (String jsonString) async
-
-## First release at 2018/07/22
-
-## Getting Started
-
-For help getting started with Flutter, view offical site
-[documentation](https://flutter.io/).
+starflut is based on "starcore-for-android" and "starfore-for-ios project".
 
 ### 1. Get source code
 
@@ -93,7 +17,6 @@ For help getting started with Flutter, view offical site
 - b. ** download "starcore_for_ios" **
 
 [srplab：starcore_for_ios.3.7.5.tar.gz](https://github.com/srplab/starcore_for_ios/raw/master/starcore_for_ios.3.5.0.tar.gz).
-
 
 ### 2. How to use, with an example of calling python
 
@@ -117,14 +40,14 @@ create sub folder under "main" and add python share libraries as follow
           zlib.cpython-39.so
         [x86_64]
           unicodedata.cpython-39.so
-          zlib.cpython-39.so  
+          zlib.cpython-39.so
         python3.9.zip
       [java]
         [jniLibs]
           [arm64-v8a]
             libpython3.9.so
             libstar_python39.so
-          [armeabi] 
+          [armeabi]
             libpython3.9.so
             libstar_python39.so
           [x86]
@@ -136,7 +59,7 @@ create sub folder under "main" and add python share libraries as follow
         res
 ```
 
-***Add code in main.dart***
+**_Add code in main.dart_**
 
 copy python files (share libraries and python3.9.zip) to app folder using function "copyFileFromAssets"
 
@@ -164,28 +87,27 @@ if( isAndroid == true ){
 }
 ```
 
-
 **For IOS**
 
 Using environment variable to control the compiling process.
 
 1. set "STARCORE_PATH" to the folder of "starcore_for_ios"
 2. if python is used, set "STARCORE_PYTHONVERSION" and "STARCORE_PYTHONCOREPATH"
->[STARCORE_PYTHONVERSION](#)  : '3.9'  '3.8'  3.7' '3.6'   '3.5'    '2.7'
->[STARCORE_PYTHONCOREPATH](#) :the folder of 'python3.6m' 'python3.6.zip' or 'python3.7m','pyton3.7.zip'...
+   > [STARCORE_PYTHONVERSION](#) : '3.9' '3.8' 3.7' '3.6' '3.5' '2.7'
+   > [STARCORE_PYTHONCOREPATH](#) :the folder of 'python3.6m' 'python3.6.zip' or 'python3.7m','pyton3.7.zip'...
 3. if ruby is used, set "STARCORE_RUBYCOREPATH"
->[STARCORE_RUBYCOREPATH](#): the folder of 'ruby 2.4'   'ruby 2.5',...
-4. if golang module is used ,set "STARCORE_GOLIBRARY",and "STARCORE_GOLIBRARYPATH". 
->[STARCORE_GOLIBRARY](#) : name of go static library, ex: if the name is libxxx.a, then here is 'xxx'
->[STARCORE_GOLIBRARYPATH](#) : where static library is located
+   > [STARCORE_RUBYCOREPATH](#): the folder of 'ruby 2.4' 'ruby 2.5',...
+4. if golang module is used ,set "STARCORE_GOLIBRARY",and "STARCORE_GOLIBRARYPATH".
+   > [STARCORE_GOLIBRARY](#) : name of go static library, ex: if the name is libxxx.a, then here is 'xxx'
+   > [STARCORE_GOLIBRARYPATH](#) : where static library is located
 5. if starcore native service is used, set "STARCORE_GETEXPORTFUNCTIONTABLENAME" ,"STARCORE_EXPORTFUNCTIONDEFINE", "STARCORE_EXPORTFUNCTIONNAME", "STARCORE_STATICLIBRARY", and "STARCORE_STATICLIBRARYPATH"
->[STARCORE_GETEXPORTFUNCTIONTABLENAME](#) : if the function name is xxx_GetExportFunctionTable,yyy_GetExportFunctionTable, then here is xxx,yyy
->[STARCORE_EXPORTFUNCTIONDEFINE](#) : 'extern \"C\" void *xxx();extern \"C\" void *yyy();'
->[v_STARCORE_EXPORTFUNCTIONNAME](#) : 'xxx,yyy'
->[STARCORE_STATICLIBRARY](#) : name of static library, ex: if the name is libxxx.a, then here is 'xxx'
->[STARCORE_STATICLIBRARYPATH](#) : the folder of the static library
->[STARCORE_FRAMEWORK](#)         : the name of framework, ex: 'xxx,yyy'
->[STARCORE_FRAMEWORKPATH](#)     : the folder of the static framework
+   > [STARCORE_GETEXPORTFUNCTIONTABLENAME](#) : if the function name is xxx_GetExportFunctionTable,yyy_GetExportFunctionTable, then here is xxx,yyy
+   > [STARCORE_EXPORTFUNCTIONDEFINE](#) : 'extern \"C\" void *xxx();extern \"C\" void *yyy();'
+   > [v_STARCORE_EXPORTFUNCTIONNAME](#) : 'xxx,yyy'
+   > [STARCORE_STATICLIBRARY](#) : name of static library, ex: if the name is libxxx.a, then here is 'xxx'
+   > [STARCORE_STATICLIBRARYPATH](#) : the folder of the static library
+   > [STARCORE_FRAMEWORK](#) : the name of framework, ex: 'xxx,yyy'
+   > [STARCORE_FRAMEWORKPATH](#) : the folder of the static framework
 
 ```
 for example
@@ -206,13 +128,16 @@ $ flutter build ios --no-codesign
 
 **For Windows**
 
-* create folder under [windows], copy share libraries into the folder, for example,
+- create folder under [windows], copy share libraries into the folder, for example,
+
 ```
   [windows]
     [starcore]
       libstar_python39.pyd
-```      
-* modify "CMakeLists.txt", instal the share libraries needed.
+```
+
+- modify "CMakeLists.txt", instal the share libraries needed.
+
 ```
 install(FILES "starcore/libstar_python39.pyd" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
   COMPONENT Runtime)
@@ -220,26 +145,30 @@ install(FILES "starcore/libstar_python39.pyd" DESTINATION "${INSTALL_BUNDLE_LIB_
 
 **For linux**
 
-* create folder under [linux], copy share libraries into the folder, for example,
+- create folder under [linux], copy share libraries into the folder, for example,
+
 ```
   [linux]
     [starcore]
       libstar_python39.so
-```      
-* modify "CMakeLists.txt", instal the share libraries needed.
+```
+
+- modify "CMakeLists.txt", instal the share libraries needed.
+
 ```
 install(FILES "starcore/libstar_python39.so" DESTINATION "${INSTALL_BUNDLE_LIB_DIR}"
-  COMPONENT Runtime)  
+  COMPONENT Runtime)
 ```
 
 **For macos**
 
->open the xxx.xcworkspace with xcode.
->click "Runner", and under the "build phase" > "Copy Bundle Resources"
->add file,
->>libstar_python39.so: which is from the folder "unlink" of starcore.
->>libpython3.9.dylib: compiled from source code of python3.9
-  
+> open the xxx.xcworkspace with xcode.
+> click "Runner", and under the "build phase" > "Copy Bundle Resources"
+> add file,
+>
+> > libstar_python39.so: which is from the folder "unlink" of starcore.
+> > libpython3.9.dylib: compiled from source code of python3.9
+
 ```
 String Path1  = await Starflut.getResourcePath();
 if( Platform == Starflut.MACOS ) {
@@ -250,12 +179,10 @@ if( Platform == Starflut.MACOS ) {
           Path1 + "/libpython3.9.dylib");
       await Starflut.setEnv("PYTHONPATH",
           "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9");
-}          
-```          
+}
+```
 
 The "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9" is folder of python script, which may be changed.
-
-
 
 **Add Python file to be called**
 
@@ -311,14 +238,11 @@ StarObjectClass python = await Service.importRawContext(null,"python", "", false
 await SrvGroup.doFile("python", assetsPath + "/flutter_assets/starfiles/" + "testcallback.py")
 ```
 
-
-API Interface:
---------
-
+## API Interface:
 
 ```
-note: 
-  !! important  
+note:
+  !! important
   !! for dart does not support destruct function of class, so the starobject must be freed manually, or else will cause memory leak
   !!    newLocalFrame, freeLocalFrame and gc can be used to help releasing starobjects.
 
@@ -374,7 +298,7 @@ Starflut:
 
   ** for android
   getNativeLibraryDir  : static Future<String> getNativeLibraryDir() async
-  getPackageName       : 
+  getPackageName       :
   unzipFromAssets      : static Future<bool> unzipFromAssets(String fileName,String desPath,bool overWriteFlag) async
                        : fileName is fullname with path relative to assets
                        : desPath is fullname with path relative to '/'
@@ -411,7 +335,7 @@ StarCoreFactory:
   regMsgCallBackP      : Future<void> regMsgCallBackP(MsgCallBackProc callBack) async
                        : note: !!! In callback function, do not call any starflut functions
   //regDispatchRequestP  : Future<void> regDispatchRequestP(DispatchRequestProc callBack) async
-  sRPDispatch          : Future<bool> sRPDispatch(bool waitFalg) async  
+  sRPDispatch          : Future<bool> sRPDispatch(bool waitFalg) async
   sRPLock              : Future<void> sRPLock() async
   sRPUnLock            : Future<void> sRPUnLock() async
   setRegisterCode      : Future<bool> setRegisterCode(String codeString,bool single) async
@@ -517,17 +441,17 @@ StarParaPkg:
   number               : Future<int> get number async
 
   []                   : Future<Object> operator [](int index) async
-                       : == Get : 
+                       : == Get :
   getValue             : Future<Object> getValue(Object value) async
                        : == Get:  value may be integer or List<int> which will returns multiple values corresponding to each index
-                       :   
+                       :
   setValue             : Future<StarParaPkgClass> setValue(int index,Object value) async
                        : == Set
   build                : Future<StarParaPkgClass> build (Object args) async
                        : args maybe List or Map
                        : return self
   clear                : Future<StarParaPkgClass> clear () async
-  appendFrom           : Future<bool> appendFrom (StarParaPkgClass srcParaPkg) async  
+  appendFrom           : Future<bool> appendFrom (StarParaPkgClass srcParaPkg) async
   free                 : Future<void> free () async
   dispose              : Future<void> dispose () async
   releaseOwner         : Future<void> releaseOwner () async
@@ -535,7 +459,7 @@ StarParaPkg:
   isDict               : Future<bool> isDict () async
   fromJSon             : Future<bool> fromJSon (String jsonstring) async
   toJSon               : Future<String> toJSon () async
-  toTuple              : Future<Object> toTuple () async     
+  toTuple              : Future<Object> toTuple () async
 
   --v0.6.0
   equals               : Future<bool> equals (StarParaPkgClass srcParaPkg) async
@@ -604,11 +528,9 @@ StarObject :
   isActive             : Future<bool> isActive () async
 ```
 
+## More Info:
 
-More Info:
---------
-
-For more information about use how to use cle's APIs, please refer to 
+For more information about use how to use cle's APIs, please refer to
 
 [common language extension_programmer's guide_en.pdf](https://github.com/srplab/starcore_for_android/blob/master/docs/common%20language%20extension_programmer's%20guide_en.pdf)
 
@@ -616,6 +538,6 @@ and,
 
 [common language extension_interface for script_en.pdf](https://github.com/srplab/starcore_for_android/blob/master/docs/common%20language%20extension_interface%20for%20script_en.pdf)
 
-For more examples, please refer to 
+For more examples, please refer to
 
 [srplab.github.io](https://srplab.github.io)
