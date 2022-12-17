@@ -10,7 +10,7 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.1
   starflut:
-    path: ../../starflut
+    path: ../starflut
 
 dev_dependencies:
   flutter_test:
