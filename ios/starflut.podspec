@@ -20,14 +20,21 @@ bridge for flutter interact with other programming languages, such as c/c++ lua,
   s.dependency 'Flutter'
   s.platform = :ios, '8.0'
 
-  #basic config
-  v_STARCORE_PATH = ENV['STARCORE_PATH']                             # '/Users/srplab/Desktop'
+  current_path_ori = __FILE__
+  current_path = current_path_ori[0..current_path_ori.rindex("/")-1]    # Dir::pwd
 
-  v_STARCORE_PYTHONVERSION = ENV['STARCORE_PYTHONVERSION']           # '3.9'  '3.8'  3.7' '3.6'   '3.5'    '2.7'
-  v_STARCORE_PYTHONCOREPATH = ENV['STARCORE_PYTHONCOREPATH']         # the folder of 'python3.6m' 'python3.6.zip' or 'python3.7m','pyton3.7.zip'...
+
+  #basic config
+  # v_STARCORE_PATH = ENV['STARCORE_PATH']                             # '/Users/srplab/Desktop'
+  # v_STARCORE_PYTHONVERSION = ENV['STARCORE_PYTHONVERSION']           # '3.9'  '3.8'  3.7' '3.6'   '3.5'    '2.7'
+  # v_STARCORE_PYTHONCOREPATH = ENV['STARCORE_PYTHONCOREPATH']         # the folder of 'python3.6m' 'python3.6.zip' or 'python3.7m','pyton3.7.zip'...
+
+  v_STARCORE_PATH = current_path+"/starcore_for_ios"                 
+  v_STARCORE_PYTHONVERSION = '3.9'
+  v_STARCORE_PYTHONCOREPATH =current_path+"/python_ios" 
+
 
   v_STARCORE_RUBYCOREPATH = ENV['STARCORE_RUBYCOREPATH']             # the folder of 'ruby 2.4'   'ruby 2.5',...
-
   v_STARCORE_GOLIBRARY = ENV['STARCORE_GOLIBRARY']                   # name of go static library, ex: if the name is libxxx.a, then here is 'xxx'. Important, the 'xxx_GetExportFunctionTable()' must exist.
   v_STARCORE_GOLIBRARYPATH = ENV['STARCORE_GOLIBRARYPATH']           # '/Users/srplab/Desktop/go.study'
 
@@ -53,8 +60,6 @@ bridge for flutter interact with other programming languages, such as c/c++ lua,
 
   starcore_path =  v_STARCORE_PATH   # such as  '/Users/srplab/Desktop', must use absolute path
 
-  current_path_ori = __FILE__
-  current_path = current_path_ori[0..current_path_ori.rindex("/")-1]    # Dir::pwd
 
   starcore_moduleexport_define = ''
   starcore_moduleexport_call = ''
