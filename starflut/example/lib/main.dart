@@ -14,7 +14,7 @@ class MyApp extends StatefulWidget {
 }
 
 class _MyAppState extends State<MyApp> {
-  String _platformVersion = 'Unknown';
+  String? _platformVersion = 'Unknown';
 
   @override
   void initState() {
@@ -22,89 +22,51 @@ class _MyAppState extends State<MyApp> {
     initPlatformState();
   }
 
-  static String format(String fmt,List<Object> params) {
-    int matchIndex = 0;
-    String replace(Match m) {
-      if (matchIndex<params.length) {
-        switch (m[4]) {
-          case "f":
-            num val = params[matchIndex++];
-            String str;
-            if (m[3]!=null && m[3].startsWith(".")) {
-              str = val.toStringAsFixed(int.parse(m[3].substring(1)));
-            } else {
-              str = val.toString();
-            }
-            if (m[2]!=null && m[2].startsWith("0")) {
-              if (val<0) {
-                str = "-"+str.substring(1).padLeft(int.parse(m[2]),"0");
-              } else {
-                str = str.padLeft(int.parse(m[2]),"0");
-              }
-            }
-            return str;
-          case "d":
-          case "x":
-          case "X":
-            int val = params[matchIndex++];
-            String str = (m[4]=="d")?val.toString():val.toRadixString(16);
-            if (m[2]!=null && m[2].startsWith("0")) {
-              if (val<0) {
-                str = "-"+str.substring(1).padLeft(int.parse(m[2]),"0");
-              } else {
-                str = str.padLeft(int.parse(m[2]),"0");
-              }
-            }
-            return (m[4]=="X")?str.toUpperCase():str.toLowerCase();
-          case "s":
-            return params[matchIndex++].toString();
-        }
-      } else {
-        throw new Exception("Missing parameter for string format");
-      }
-      throw new Exception("Invalid format string: "+m[0].toString());
-    }
-  }
-
   // Platform messages are asynchronous, so we initialize in an async method.
   Future<void> initPlatformState() async {
-    String platformVersion;
+    String? platformVersion;
     // Platform messages may fail, so we use a try/catch PlatformException.
     try {
-      int TestCase = 3;  //7 -- lua //6 -- go, test for ios only //---5 ruby(android/ios/desktop)  //---4 ios //--3 call back(android/ios/desktop);  //--2  call python(android/desktop) //--1 android api //--0 develop(android/desktop)
-
+      int TestCase =
+          3; //7 -- lua //6 -- go, test for ios only //---5 ruby(android/ios/desktop)  //---4 ios //--3 call back(android/ios/desktop);  //--2  call python(android/desktop) //--1 android api //--0 develop(android/desktop)
 
       if (TestCase == 0) {
-        String Path1  = await Starflut.getResourcePath();
-        String Path2 = await Starflut.getAssetsPath();
-        StarCoreFactory starcore = await Starflut.getFactory();
-        int Result = 0;
-        Result = await starcore.initCore(true, false, false, true, "", 0, "", 0);
+        String? Path1 = await Starflut.getResourcePath();
+        String? Path2 = await Starflut.getAssetsPath();
+        StarCoreFactory starcore =
+            await (Starflut.getFactory() as FutureOr<StarCoreFactory>);
+        int? Result = 0;
+        Result = await (starcore.initCore(
+            true, false, false, true, "", 0, "", 0) as FutureOr<int>);
         await starcore.regMsgCallBackP(
-                (int serviceGroupID, int uMsg, Object wParam, Object lParam) async{
-              print("$serviceGroupID  $uMsg   $wParam   $lParam");
-              return null;
-            });
-        int Platform = await Starflut.getPlatform();
-        if( Platform == Starflut.MACOS ) {
-          await starcore.setShareLibraryPath(
-              Path1); //set path for interface library
-          bool LoadResult = await Starflut.loadLibrary(Path1+"/libpython3.9.dylib");
-          print("$LoadResult");  //--load
-          await Starflut.setEnv("PYTHONPATH","/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9");
-          String pypath = await Starflut.getEnv("PYTHONPATH");
+            (int serviceGroupID, int uMsg, Object wParam, Object lParam) async {
+          print("$serviceGroupID  $uMsg   $wParam   $lParam");
+          return null;
+        });
+        int? Platform = await Starflut.getPlatform();
+        if (Platform == Starflut.MACOS) {
+          await starcore
+              .setShareLibraryPath(Path1!); //set path for interface library
+          bool? LoadResult =
+              await Starflut.loadLibrary(Path1 + "/libpython3.9.dylib");
+          print("$LoadResult"); //--load
+          await Starflut.setEnv("PYTHONPATH",
+              "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9");
+          String? pypath = await Starflut.getEnv("PYTHONPATH");
           print("$pypath");
-        }else if( Platform == Starflut.WINDOWS ) {
+        } else if (Platform == Starflut.WINDOWS) {
           await starcore.setShareLibraryPath(
-              Path1.replaceAll("\\","/")); //set path for interface library
+              Path1!.replaceAll("\\", "/")); //set path for interface library
         }
         //StarSrvGroupClass StarSrvGroup = await starcore.getSrvGroup(0);
         //print("$Result");
         //StarSrvGroupClass StarSrvGroup = await starcore.initSimpleEx(0, 0, []);
-        StarServiceClass StarService =
-        await starcore.initSimple("test", "123", 0, 0, []);
-        StarSrvGroupClass StarSrvGroup = await StarService["_ServiceGroup"];
-        print("starsrvgroup = " + await StarSrvGroup.getString());
+        StarServiceClass StarService = await (starcore
+            .initSimple("test", "123", 0, 0, []) as FutureOr<StarServiceClass>);
+        StarSrvGroupClass StarSrvGroup =
+            await (StarService["_ServiceGroup"] as FutureOr<StarSrvGroupClass>);
+        print("starsrvgroup = " +
+            await (StarSrvGroup.getString() as FutureOr<String>));
 
         print("$Result");
         var lang = await starcore.getLocale();
@@ -116,39 +78,46 @@ class _MyAppState extends State<MyApp> {
         var hand = await starcore.coreHandle();
         print("$hand");
 
-        StarParaPkgClass ParaPkg = await StarSrvGroup.newParaPkg(null,[
+        StarParaPkgClass ParaPkg = await (StarSrvGroup.newParaPkg(null, [
           'aaaa',
           234,
           [345]
-        ]);
+        ]) as FutureOr<StarParaPkgClass>);
         var isp = StarSrvGroup.isParaPkg(ParaPkg);
         print("$isp");
 
-        print("parapkg " + await ParaPkg[0]);
+        print("parapkg " + await (ParaPkg[0] as FutureOr<String>));
         print(await ParaPkg[1]);
 
         await ParaPkg.setValue(0, '22222222');
-        print("parapkg new value =" + await ParaPkg[0]);
+        print("parapkg new value =" + await (ParaPkg[0] as FutureOr<String>));
 
         await ParaPkg.setValue(1, ['22222222']);
 
         print(await ParaPkg.toTuple());
 
         //--map
-        StarParaPkgClass ParaPkg1 = await StarSrvGroup.newParaPkg(null,{"a":1, "b":2, "c":3});
+        StarParaPkgClass ParaPkg1 =
+            await (StarSrvGroup.newParaPkg(null, {"a": 1, "b": 2, "c": 3})
+                as FutureOr<StarParaPkgClass>);
         print(await ParaPkg1[0]);
         print(await ParaPkg1.toTuple());
 
-        StarParaPkgClass ParaPkg2 = await StarSrvGroup.newParaPkg(null,[345.67,{"a":1, "b":2, "c":3}]);
+        StarParaPkgClass ParaPkg2 = await (StarSrvGroup.newParaPkg(null, [
+          345.67,
+          {"a": 1, "b": 2, "c": 3}
+        ]) as FutureOr<StarParaPkgClass>);
         print(await ParaPkg2[1]);
         print(await ParaPkg2.toTuple());
 
-        await ParaPkg1.build([345.67,{"a":1, "b":2, "c":3}]);
+        await ParaPkg1.build([
+          345.67,
+          {"a": 1, "b": 2, "c": 3}
+        ]);
         print(await ParaPkg1.toTuple());
 
-        await ParaPkg1.build({"a":1, "b":2, "c":3});
+        await ParaPkg1.build({"a": 1, "b": 2, "c": 3});
         print(await ParaPkg1.toTuple());
-
 
         var srvp = await StarSrvGroup.getServicePath();
         print("$srvp");
@@ -157,143 +126,166 @@ class _MyAppState extends State<MyApp> {
         print("$curp");
 
         /*---script python--*/
-        bool isAndroid = await Starflut.isAndroid();
-        if( isAndroid == true ){
-          var py_result1 =
-          await Starflut.copyFileFromAssets("python3.9.zip", null,null);   //desRelatePath must be null
+        bool? isAndroid = await Starflut.isAndroid();
+        if (isAndroid == true) {
+          var py_result1 = await Starflut.copyFileFromAssets(
+              "python3.9.zip", null, null); //desRelatePath must be null
           print("$py_result1");
-          var nativepath = await Starflut.getNativeLibraryDir();
+          var nativepath =
+              await (Starflut.getNativeLibraryDir() as FutureOr<String>);
           var LibraryPath = "";
-          if( nativepath.contains("x86_64"))
+          if (nativepath.contains("x86_64"))
             LibraryPath = "x86_64";
-          else if( nativepath.contains("arm64"))
+          else if (nativepath.contains("arm64"))
             LibraryPath = "arm64-v8a";
-          else if( nativepath.contains("arm"))
+          else if (nativepath.contains("arm"))
             LibraryPath = "armeabi";
-          else if( nativepath.contains("x86"))
-            LibraryPath = "x86";
-          py_result1 =
-          await Starflut.copyFileFromAssets("zlib.cpython-39.so", LibraryPath,null);
+          else if (nativepath.contains("x86")) LibraryPath = "x86";
+          py_result1 = await Starflut.copyFileFromAssets(
+              "zlib.cpython-39.so", LibraryPath, null);
           print("$py_result1");
           py_result1 = await Starflut.copyFileFromAssets(
-              "unicodedata.cpython-39.so", LibraryPath,null);
+              "unicodedata.cpython-39.so", LibraryPath, null);
           print("$py_result1");
 
           py_result1 = await Starflut.loadLibrary("libpython3.9.so");
           print("$py_result1");
         }
 
-        bool run_result =
-        await StarSrvGroup.runScript("python39", "print(123)", "");
+        bool? run_result =
+            await StarSrvGroup.runScript("python39", "print(123)", "");
         print("$run_result");
 
         //---moduleExit run before runScript, so will cause exception,
         //---moduleExit should be run on mainthread.
         await starcore.moduleExit();
-      }else if (TestCase == 1) {
-        StarCoreFactory starcore = await Starflut.getFactory();
-        StarServiceClass Service = await starcore.initSimple("test", "123", 0, 0, []);
+      } else if (TestCase == 1) {
+        StarCoreFactory starcore =
+            await (Starflut.getFactory() as FutureOr<StarCoreFactory>);
+        StarServiceClass Service = await (starcore
+            .initSimple("test", "123", 0, 0, []) as FutureOr<StarServiceClass>);
         await starcore.regMsgCallBackP(
-                (int serviceGroupID, int uMsg, Object wParam, Object lParam) async{
-              print("$serviceGroupID  $uMsg   $wParam   $lParam");
-              return null;
-            });
-        StarSrvGroupClass SrvGroup = await Service["_ServiceGroup"];
-        await SrvGroup.initRaw("java",Service);
-        var Android_Build = await Service.importRawContext(null,"java","android.os.Build",false,"");
-        print("Android_Build = "+ await Android_Build.getString());
-        StarObjectClass VERSION = await Android_Build["VERSION"];
+            (int serviceGroupID, int uMsg, Object wParam, Object lParam) async {
+          print("$serviceGroupID  $uMsg   $wParam   $lParam");
+          return null;
+        });
+        StarSrvGroupClass SrvGroup =
+            await (Service["_ServiceGroup"] as FutureOr<StarSrvGroupClass>);
+        await SrvGroup.initRaw("java", Service);
+        var Android_Build = await (Service.importRawContext(
+                null, "java", "android.os.Build", false, "")
+            as FutureOr<StarObjectClass>);
+        print("Android_Build = " +
+            await (Android_Build.getString() as FutureOr<String>));
+        StarObjectClass? VERSION =
+            await (Android_Build["VERSION"] as FutureOr<StarObjectClass?>);
         print("$VERSION = ");
-        var c_acti = await Starflut.getActivity(Service);
-        print("Activity = "+await c_acti.getString());
+        var c_acti =
+            await (Starflut.getActivity(Service) as FutureOr<StarObjectClass>);
+        print("Activity = " + await (c_acti.getString() as FutureOr<String>));
 
-        dynamic obj1 = await c_acti.call("getApplicationContext",[]);
+        dynamic obj1 = await c_acti.call("getApplicationContext", []);
         print("getApplicationContext = $obj1");
-        print("getApplicationContext = "+ await obj1.getString());
+        print("getApplicationContext = " + await obj1.getString());
 
-        dynamic Android_Context = await Service.importRawContext(null,"java","android.content.Context",false,"");
+        dynamic Android_Context = await Service.importRawContext(
+            null, "java", "android.content.Context", false, "");
         dynamic TELEPHONY_SERVICE = await Android_Context['TELEPHONY_SERVICE'];
         print("TELEPHONY_SERVICE = $TELEPHONY_SERVICE ");
 
-        dynamic obj2 = await obj1.call("getPackageManager",[]);
-        print("getPackageManager = "+ await obj2.getString());
+        dynamic obj2 = await obj1.call("getPackageManager", []);
+        print("getPackageManager = " + await obj2.getString());
 
         dynamic obj3 = await obj2["FEATURE_CAMERA"];
         print("FEATURE_CAMERA = $obj3");
 
-        dynamic Android_PackageManager = await Service.importRawContext(null,"java","android.content.pm.PackageManager",false,"");
-        print("Android_PackageManager = "+ await Android_PackageManager.getString());
+        dynamic Android_PackageManager = await Service.importRawContext(
+            null, "java", "android.content.pm.PackageManager", false, "");
+        print("Android_PackageManager = " +
+            await Android_PackageManager.getString());
 
         dynamic obj4 = await Android_PackageManager["FEATURE_CAMERA"];
         print("FEATURE_CAMERA = $obj4");
-
-      }else if (TestCase == 2) {
-        String Path1  = await Starflut.getResourcePath();
-        String Path2 = await Starflut.getAssetsPath();
-        StarCoreFactory starcore = await Starflut.getFactory();
-        StarServiceClass Service = await starcore.initSimple("test", "123", 0, 0, []);
+      } else if (TestCase == 2) {
+        String? Path1 = await Starflut.getResourcePath();
+        String? Path2 = await Starflut.getAssetsPath();
+        StarCoreFactory starcore =
+            await (Starflut.getFactory() as FutureOr<StarCoreFactory>);
+        StarServiceClass Service = await (starcore
+            .initSimple("test", "123", 0, 0, []) as FutureOr<StarServiceClass>);
         await starcore.regMsgCallBackP(
-                (int serviceGroupID, int uMsg, Object wParam, Object lParam) async{
-              print("$serviceGroupID  $uMsg   $wParam   $lParam");
-              return null;
-            });
-        StarSrvGroupClass SrvGroup = await Service["_ServiceGroup"];
+            (int serviceGroupID, int uMsg, Object wParam, Object lParam) async {
+          print("$serviceGroupID  $uMsg   $wParam   $lParam");
+          return null;
+        });
+        StarSrvGroupClass SrvGroup =
+            await (Service["_ServiceGroup"] as FutureOr<StarSrvGroupClass>);
 
         /*--macos--*/
-        int Platform = await Starflut.getPlatform();
-        if( Platform == Starflut.MACOS ) {
-          await starcore.setShareLibraryPath(
-              Path1); //set path for interface library
-          bool LoadResult = await Starflut.loadLibrary(Path1+"/libpython3.9.dylib");
-          print("$LoadResult");  //--load
-          await Starflut.setEnv("PYTHONPATH","/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9");
-          String pypath = await Starflut.getEnv("PYTHONPATH");
+        int? Platform = await Starflut.getPlatform();
+        if (Platform == Starflut.MACOS) {
+          await starcore
+              .setShareLibraryPath(Path1!); //set path for interface library
+          bool? LoadResult =
+              await Starflut.loadLibrary(Path1 + "/libpython3.9.dylib");
+          print("$LoadResult"); //--load
+          await Starflut.setEnv("PYTHONPATH",
+              "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9");
+          String? pypath = await Starflut.getEnv("PYTHONPATH");
           print("$pypath");
-        }else if( Platform == Starflut.WINDOWS ) {
+        } else if (Platform == Starflut.WINDOWS) {
           await starcore.setShareLibraryPath(
-              Path1.replaceAll("\\","/")); //set path for interface library
+              Path1!.replaceAll("\\", "/")); //set path for interface library
         }
 
         /*---script python--*/
-        bool isAndroid = await Starflut.isAndroid();
-        if( isAndroid == true ){
-          await Starflut.copyFileFromAssets("testcallback.py", "flutter_assets/starfiles","flutter_assets/starfiles");
-          await Starflut.copyFileFromAssets("testpy.py", "flutter_assets/starfiles","flutter_assets/starfiles");
-          await Starflut.copyFileFromAssets("python3.9.zip", null,null);  //desRelatePath must be null
+        bool? isAndroid = await Starflut.isAndroid();
+        if (isAndroid == true) {
+          await Starflut.copyFileFromAssets("testcallback.py",
+              "flutter_assets/starfiles", "flutter_assets/starfiles");
+          await Starflut.copyFileFromAssets("testpy.py",
+              "flutter_assets/starfiles", "flutter_assets/starfiles");
+          await Starflut.copyFileFromAssets(
+              "python3.9.zip", null, null); //desRelatePath must be null
 
-          var nativepath = await Starflut.getNativeLibraryDir();
+          var nativepath =
+              await (Starflut.getNativeLibraryDir() as FutureOr<String>);
           var LibraryPath = "";
-          if( nativepath.contains("x86_64"))
+          if (nativepath.contains("x86_64"))
             LibraryPath = "x86_64";
-          else if( nativepath.contains("arm64"))
+          else if (nativepath.contains("arm64"))
             LibraryPath = "arm64-v8a";
-          else if( nativepath.contains("arm"))
+          else if (nativepath.contains("arm"))
             LibraryPath = "armeabi";
-          else if( nativepath.contains("x86"))
-            LibraryPath = "x86";
+          else if (nativepath.contains("x86")) LibraryPath = "x86";
 
-          await Starflut.copyFileFromAssets("zlib.cpython-39.so", LibraryPath,null);
-          await Starflut.copyFileFromAssets("unicodedata.cpython-39.so", LibraryPath,null);
+          await Starflut.copyFileFromAssets(
+              "zlib.cpython-39.so", LibraryPath, null);
+          await Starflut.copyFileFromAssets(
+              "unicodedata.cpython-39.so", LibraryPath, null);
           await Starflut.loadLibrary("libpython3.9.so");
         }
 
-        String docPath = await Starflut.getDocumentPath();
+        String? docPath = await Starflut.getDocumentPath();
         print("docPath = $docPath");
 
-        String resPath = await Starflut.getResourcePath();
+        String? resPath = await Starflut.getResourcePath();
         print("resPath = $resPath");
 
-        String assetsPath = await Starflut.getAssetsPath();
+        String assetsPath =
+            await (Starflut.getAssetsPath() as FutureOr<String>);
         print("assetsPath = $assetsPath");
 
         dynamic rr1 = await SrvGroup.initRaw("python39", Service);
 
         print("initRaw = $rr1");
-        var Result = await SrvGroup.loadRawModule("python", "", assetsPath + "/flutter_assets/starfiles/" + "testpy.py", false);
+        var Result = await SrvGroup.loadRawModule("python", "",
+            assetsPath + "/flutter_assets/starfiles/" + "testpy.py", false);
         print("loadRawModule = $Result");
 
-        dynamic python = await Service.importRawContext(null,"python", "", false, "");
-        print("python = "+ await python.getString());
+        dynamic python =
+            await Service.importRawContext(null, "python", "", false, "");
+        print("python = " + await python.getString());
 
         StarObjectClass retobj = await python.call("tt", ["hello ", "world"]);
         print(await retobj[0]);
@@ -302,10 +294,12 @@ class _MyAppState extends State<MyApp> {
         print(await python["g1"]);
 
         StarObjectClass yy = await python.call("yy", ["hello ", "world", 123]);
-        print(await yy.call("__len__",[]));
+        print(await yy.call("__len__", []));
 
-        StarObjectClass multiply = await Service.importRawContext(null,"python", "Multiply", true, "");
-        StarObjectClass multiply_inst = await multiply.newObject(["", "", 33, 44]);
+        StarObjectClass multiply = await (Service.importRawContext(
+            null, "python", "Multiply", true, "") as FutureOr<StarObjectClass>);
+        StarObjectClass multiply_inst = await (multiply
+            .newObject(["", "", 33, 44]) as FutureOr<StarObjectClass>);
         print(await multiply_inst.getString());
 
         print(await multiply_inst.call("multiply", [11, 22]));
@@ -314,87 +308,106 @@ class _MyAppState extends State<MyApp> {
         await starcore.moduleExit();
 
         print("finish");
-
-      }else if (TestCase == 3) {
-        String Path1  = await Starflut.getResourcePath();
-        String Path2 = await Starflut.getAssetsPath();
-        StarCoreFactory starcore = await Starflut.getFactory();
+      } else if (TestCase == 3) {
+        String? Path1 = await Starflut.getResourcePath();
+        String? Path2 = await Starflut.getAssetsPath();
+        StarCoreFactory starcore =
+            await (Starflut.getFactory() as FutureOr<StarCoreFactory>);
 
         String FrameTag = Starflut.newLocalFrame();
 
-        StarServiceClass Service = await starcore.initSimple("test", "123", 0, 0, []);
+        StarServiceClass Service = await (starcore
+            .initSimple("test", "123", 0, 0, []) as FutureOr<StarServiceClass>);
         await starcore.regMsgCallBackP(
-                (int serviceGroupID, int uMsg, Object wParam, Object lParam) async{
-              print("$serviceGroupID  $uMsg   $wParam   $lParam");
-              return null;
-            });
-        StarSrvGroupClass SrvGroup = await Service["_ServiceGroup"];
+            (int serviceGroupID, int uMsg, Object wParam, Object lParam) async {
+          print("$serviceGroupID  $uMsg   $wParam   $lParam");
+          return null;
+        });
+        StarSrvGroupClass SrvGroup =
+            await (Service["_ServiceGroup"] as FutureOr<StarSrvGroupClass>);
 
-        int Platform = await Starflut.getPlatform();
-        if( Platform == Starflut.MACOS ) {
-          await starcore.setShareLibraryPath(
-              Path1); //set path for interface library
-          bool LoadResult = await Starflut.loadLibrary(Path1+"/libpython3.9.dylib");
-          print("$LoadResult");  //--load
-          await Starflut.setEnv("PYTHONPATH","/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9");
-          String pypath = await Starflut.getEnv("PYTHONPATH");
+        int? Platform = await Starflut.getPlatform();
+        if (Platform == Starflut.MACOS) {
+          await starcore
+              .setShareLibraryPath(Path1!); //set path for interface library
+          bool? LoadResult =
+              await Starflut.loadLibrary(Path1 + "/libpython3.9.dylib");
+          print("$LoadResult"); //--load
+          await Starflut.setEnv("PYTHONPATH",
+              "/Library/Frameworks/Python.framework/Versions/3.9/lib/python3.9");
+          String? pypath = await Starflut.getEnv("PYTHONPATH");
           print("$pypath");
-        }else if( Platform == Starflut.WINDOWS ) {
+        } else if (Platform == Starflut.WINDOWS) {
           //await starcore.setShareLibraryPath(
           //    Path1.replaceAll("\\","/")); //set path for interface library
         }
         /*---script python--*/
-        bool isAndroid = await Starflut.isAndroid();
-        if( isAndroid == true ){
-          await Starflut.copyFileFromAssets("testcallback.py", "flutter_assets/starfiles","flutter_assets/starfiles");
-          await Starflut.copyFileFromAssets("testpy.py", "flutter_assets/starfiles","flutter_assets/starfiles");
-          await Starflut.copyFileFromAssets("python3.9.zip", null,null);   //desRelatePath must be null
+        bool? isAndroid = await Starflut.isAndroid();
+        if (isAndroid == true) {
+          await Starflut.copyFileFromAssets("testcallback.py",
+              "flutter_assets/starfiles", "flutter_assets/starfiles");
+          await Starflut.copyFileFromAssets("testpy.py",
+              "flutter_assets/starfiles", "flutter_assets/starfiles");
+          await Starflut.copyFileFromAssets(
+              "python3.9.zip", null, null); //desRelatePath must be null
 
-          var nativepath = await Starflut.getNativeLibraryDir();
+          var nativepath =
+              await (Starflut.getNativeLibraryDir() as FutureOr<String>);
           var LibraryPath = "";
-          if( nativepath.contains("x86_64"))
+          if (nativepath.contains("x86_64"))
             LibraryPath = "x86_64";
-          else if( nativepath.contains("arm64"))
+          else if (nativepath.contains("arm64"))
             LibraryPath = "arm64-v8a";
-          else if( nativepath.contains("arm"))
+          else if (nativepath.contains("arm"))
             LibraryPath = "armeabi";
-          else if( nativepath.contains("x86"))
-            LibraryPath = "x86";
+          else if (nativepath.contains("x86")) LibraryPath = "x86";
 
-          await Starflut.copyFileFromAssets("zlib.cpython-39.so", LibraryPath,null);
-          await Starflut.copyFileFromAssets("unicodedata.cpython-39.so", LibraryPath,null);
+          await Starflut.copyFileFromAssets(
+              "zlib.cpython-39.so", LibraryPath, null);
+          await Starflut.copyFileFromAssets(
+              "unicodedata.cpython-39.so", LibraryPath, null);
           await Starflut.loadLibrary("libpython3.9.so");
         }
 
-        String docPath = await Starflut.getDocumentPath();
+        String? docPath = await Starflut.getDocumentPath();
         print("docPath = $docPath");
 
-        String resPath = await Starflut.getResourcePath();
+        String? resPath = await Starflut.getResourcePath();
         print("resPath = $resPath");
 
-        String assetsPath = await Starflut.getAssetsPath();
+        String assetsPath =
+            await (Starflut.getAssetsPath() as FutureOr<String>);
         print("assetsPath = $assetsPath");
 
         print("begin init Raw)");
-        bool rr1 = await SrvGroup.initRaw("python39", Service);
+        bool? rr1 = await SrvGroup.initRaw("python39", Service);
         print("initRaw = $rr1");
 
-        StarObjectClass python = await Service.importRawContext(FrameTag,"python", "", false, "");
+        StarObjectClass python =
+            await (Service.importRawContext(FrameTag, "python", "", false, "")
+                as FutureOr<StarObjectClass>);
 
         python.lock();
 
-        print(await python.getValue(["_Service","_Class","_ID","_Name"]));
+        print(await python.getValue(["_Service", "_Class", "_ID", "_Name"]));
 
-        print("python = "+ await python.getString());
+        print("python = " + await (python.getString() as FutureOr<String>));
 
-        await SrvGroup.doFile("python", assetsPath + "/flutter_assets/starfiles/" + "testcallback.py");
+        await SrvGroup.doFile("python",
+            assetsPath + "/flutter_assets/starfiles/" + "testcallback.py");
 
-        StarObjectClass CallBackObj = await Service.newObject(FrameTag,[]);
+        StarObjectClass CallBackObj = await (Service.newObject(FrameTag, [])
+            as FutureOr<StarObjectClass>);
         await python.setValue("CallBackObj", CallBackObj);
 
-        await CallBackObj.regScriptProcP("PrintHello", (StarObjectClass cleObject, String FrameTag,List paras ) async {
+        await CallBackObj.regScriptProcP("PrintHello",
+            (StarObjectClass cleObject, String FrameTag, List? paras) async {
           print("$paras");
-          return ["return from python", {"pa":1, "pb":2, "pc":3},345.4];
+          return [
+            "return from python",
+            {"pa": 1, "pb": 2, "pc": 3},
+            345.4
+          ];
         });
 
         /*
@@ -402,7 +415,10 @@ class _MyAppState extends State<MyApp> {
         print("retobj  = $retobj");
         */
 
-        var rrr = await python.call("tt", [{"a":1, "b":2, "c":3}, "world"]);
+        var rrr = await python.call("tt", [
+          {"a": 1, "b": 2, "c": 3},
+          "world"
+        ]);
         print("return from python $rrr");
 
         Starflut.freeLocalFrame(FrameTag);
@@ -410,25 +426,27 @@ class _MyAppState extends State<MyApp> {
         await starcore.moduleExit();
 
         print("finish");
-
-      }else if (TestCase == 4) {
-        StarCoreFactory starcore = await Starflut.getFactory();
+      } else if (TestCase == 4) {
+        StarCoreFactory starcore =
+            await (Starflut.getFactory() as FutureOr<StarCoreFactory>);
         int Result = 0;
         /*Result =
             await starcore.initCore(true, false, false, true, "", 0, "", 0);
             */
-        StarServiceClass Service = await starcore.initSimple("test", "123", 0, 0, []);
+        StarServiceClass Service = await (starcore
+            .initSimple("test", "123", 0, 0, []) as FutureOr<StarServiceClass>);
         print("$Service");
         await starcore.regMsgCallBackP(
-                (int serviceGroupID, int uMsg, Object wParam, Object lParam) async{
-              print("$serviceGroupID  $uMsg   $wParam   $lParam");
-              return null;
-            });
-        StarSrvGroupClass SrvGroup = await Service["_ServiceGroup"];
+            (int serviceGroupID, int uMsg, Object wParam, Object lParam) async {
+          print("$serviceGroupID  $uMsg   $wParam   $lParam");
+          return null;
+        });
+        StarSrvGroupClass SrvGroup =
+            await (Service["_ServiceGroup"] as FutureOr<StarSrvGroupClass>);
         print("$SrvGroup");
 
         print(await SrvGroup.activeScriptInterface("ruby"));
-        print(await Service.runScript("python39","print(123)",null,null));
+        print(await Service.runScript("python39", "print(123)", null, null));
         print("+++++++++++++++++++++++");
 
         var srvp = await SrvGroup.getServicePath();
@@ -439,62 +457,69 @@ class _MyAppState extends State<MyApp> {
 
         List<int> listB = [1, 2, 3, 4, 5];
         List<String> numbersB = ['one', 'two', 'three', 'four'];
-        Map<String, int> map = {"a":1, "b":2, "c":3};
+        Map<String, int> map = {"a": 1, "b": 2, "c": 3};
 
-        StarParaPkgClass ParaPkg = await SrvGroup.newParaPkg(null,[
+        StarParaPkgClass ParaPkg = await (SrvGroup.newParaPkg(null, [
           34359738367,
           'aaaa',
           234,
           false,
-          [345,345],
+          [345, 345],
           listB,
           numbersB,
           map
-        ]);
-        print(await ParaPkg.getValue([1,4,5]));
+        ]) as FutureOr<StarParaPkgClass>);
+        print(await ParaPkg.getValue([1, 4, 5]));
 
         print(await ParaPkg.toTuple());
 
-        StarParaPkgClass ParaPkg1 = await SrvGroup.newParaPkg(null,[map]);
+        StarParaPkgClass? ParaPkg1 = await SrvGroup.newParaPkg(null, [map]);
 
-        StarBinBufClass BinBuf = await SrvGroup.newBinBuf(null);
-        print(await BinBuf.read(0,100));
+        StarBinBufClass BinBuf =
+            await (SrvGroup.newBinBuf(null) as FutureOr<StarBinBufClass>);
+        print(await BinBuf.read(0, 100));
 
-        String docPath = await Starflut.getDocumentPath();
+        String? docPath = await Starflut.getDocumentPath();
         print("docPath = $docPath");
 
         /*---script python--*/
-        bool isAndroid = await Starflut.isAndroid();
-        if( isAndroid == true ){
-          await Starflut.copyFileFromAssets("testcallback.py", "flutter_assets/starfiles","flutter_assets/starfiles");
-          await Starflut.copyFileFromAssets("testpy.py", "flutter_assets/starfiles","flutter_assets/starfiles");
-          await Starflut.copyFileFromAssets("python3.9.zip", null,null);  //desRelatePath must be null
+        bool? isAndroid = await Starflut.isAndroid();
+        if (isAndroid == true) {
+          await Starflut.copyFileFromAssets("testcallback.py",
+              "flutter_assets/starfiles", "flutter_assets/starfiles");
+          await Starflut.copyFileFromAssets("testpy.py",
+              "flutter_assets/starfiles", "flutter_assets/starfiles");
+          await Starflut.copyFileFromAssets(
+              "python3.9.zip", null, null); //desRelatePath must be null
 
-          var nativepath = await Starflut.getNativeLibraryDir();
+          var nativepath =
+              await (Starflut.getNativeLibraryDir() as FutureOr<String>);
           var LibraryPath = "";
-          if( nativepath.contains("x86_64"))
+          if (nativepath.contains("x86_64"))
             LibraryPath = "x86_64";
-          else if( nativepath.contains("arm64"))
+          else if (nativepath.contains("arm64"))
             LibraryPath = "arm64-v8a";
-          else if( nativepath.contains("arm"))
+          else if (nativepath.contains("arm"))
             LibraryPath = "armeabi";
-          else if( nativepath.contains("x86"))
-            LibraryPath = "x86";
+          else if (nativepath.contains("x86")) LibraryPath = "x86";
 
-          await Starflut.copyFileFromAssets("zlib.cpython-39.so", LibraryPath,null);
-          await Starflut.copyFileFromAssets("unicodedata.cpython-39.so", LibraryPath,null);
+          await Starflut.copyFileFromAssets(
+              "zlib.cpython-39.so", LibraryPath, null);
+          await Starflut.copyFileFromAssets(
+              "unicodedata.cpython-39.so", LibraryPath, null);
           await Starflut.loadLibrary("libpython3.9.so");
         }
 
         print("begin init Raw)");
-        bool rr1 = await SrvGroup.initRaw("python39", Service);
+        bool? rr1 = await SrvGroup.initRaw("python39", Service);
         print("initRaw = $rr1");
 
-        StarObjectClass python = await Service.importRawContext(null,"python", "", false, "");
+        StarObjectClass python =
+            await (Service.importRawContext(null, "python", "", false, "")
+                as FutureOr<StarObjectClass>);
         print(await python.getString());
 
-        bool run_result =
-        await SrvGroup.runScript("python", "print(123)", "");
+        bool? run_result = await SrvGroup.runScript("python", "print(123)", "");
         print("$run_result");
 
 /*
@@ -505,75 +530,88 @@ class _MyAppState extends State<MyApp> {
 
         python.lock();
 
-        print(await python.getValue(["_Service","_Class","_ID","_Name"]));
+        print(await python.getValue(["_Service", "_Class", "_ID", "_Name"]));
 
-        print("python = "+ await python.getString());
+        print("python = " + await (python.getString() as FutureOr<String>));
 
-        String resPath = await Starflut.getResourcePath();
+        String resPath = await (Starflut.getResourcePath() as FutureOr<String>);
         print("resPath = $resPath");
 
-        await SrvGroup.doFile("python", resPath + "/flutter_assets/starfiles/" + "testcallback.py");
+        await SrvGroup.doFile("python",
+            resPath + "/flutter_assets/starfiles/" + "testcallback.py");
 
-        StarObjectClass CallBackObj = await Service.newObject(null,[]);
+        StarObjectClass CallBackObj =
+            await (Service.newObject(null, []) as FutureOr<StarObjectClass>);
         await python.setValue("CallBackObj", CallBackObj);
 
-        await CallBackObj.regScriptProcP("PrintHello", (StarObjectClass cleObject, String FrameTag, List paras ) async {
+        await CallBackObj.regScriptProcP("PrintHello",
+            (StarObjectClass cleObject, String FrameTag, List? paras) async {
           print("$paras");
           return ["return from python", 345.4];
         });
         await python.call("tt", ["hello ", "world"]);
-
-      }else if (TestCase == 5) {
-        String Path1  = await Starflut.getResourcePath();
-        String Path2 = await Starflut.getAssetsPath();
-        StarCoreFactory starcore = await Starflut.getFactory();
-        StarServiceClass Service = await starcore.initSimple("test", "123", 0, 0, []);
+      } else if (TestCase == 5) {
+        String? Path1 = await Starflut.getResourcePath();
+        String? Path2 = await Starflut.getAssetsPath();
+        StarCoreFactory starcore =
+            await (Starflut.getFactory() as FutureOr<StarCoreFactory>);
+        StarServiceClass Service = await (starcore
+            .initSimple("test", "123", 0, 0, []) as FutureOr<StarServiceClass>);
         print("$Service");
         await starcore.regMsgCallBackP(
-                (int serviceGroupID, int uMsg, Object wParam, Object lParam) async{
-              print("$serviceGroupID  $uMsg   $wParam   $lParam");
-              return null;
-            });
-        StarSrvGroupClass SrvGroup = await Service["_ServiceGroup"];
+            (int serviceGroupID, int uMsg, Object wParam, Object lParam) async {
+          print("$serviceGroupID  $uMsg   $wParam   $lParam");
+          return null;
+        });
+        StarSrvGroupClass SrvGroup =
+            await (Service["_ServiceGroup"] as FutureOr<StarSrvGroupClass>);
         print("$SrvGroup");
 
         /*--macos--*/
-        int Platform = await Starflut.getPlatform();
-        if( Platform == Starflut.MACOS ) {
-          await starcore.setShareLibraryPath(
-              Path1); //set path for interface library
-          bool LoadResult = await Starflut.loadLibrary(Path1+"/libruby.2.5.1.dylib");
-          print("$LoadResult");  //--load
-          bool SetResult = await starcore.setScript("ruby","","-m "+Path1+"/libruby.2.5.1.dylib");
-          print("SetResult = $SetResult");  //--set ruby module
+        int? Platform = await Starflut.getPlatform();
+        if (Platform == Starflut.MACOS) {
+          await starcore
+              .setShareLibraryPath(Path1!); //set path for interface library
+          bool? LoadResult =
+              await Starflut.loadLibrary(Path1 + "/libruby.2.5.1.dylib");
+          print("$LoadResult"); //--load
+          bool? SetResult = await starcore.setScript(
+              "ruby", "", "-m " + Path1 + "/libruby.2.5.1.dylib");
+          print("SetResult = $SetResult"); //--set ruby module
         }
 
-        String docPath = await Starflut.getDocumentPath();
+        String? docPath = await Starflut.getDocumentPath();
         print("docPath = $docPath");
 
-        String resPath = await Starflut.getResourcePath();
+        String? resPath = await Starflut.getResourcePath();
         print("resPath = $resPath");
 
-        String assetsPath = await Starflut.getAssetsPath();
+        String assetsPath =
+            await (Starflut.getAssetsPath() as FutureOr<String>);
         print("assetsPath = $assetsPath");
 
-        bool InitResult = await SrvGroup.initRaw("ruby",Service);
+        bool? InitResult = await SrvGroup.initRaw("ruby", Service);
         print("InitResult = $InitResult");
-        StarObjectClass ruby = await Service.importRawContext(null,"ruby","",false,"");
+        StarObjectClass ruby =
+            await (Service.importRawContext(null, "ruby", "", false, "")
+                as FutureOr<StarObjectClass>);
         print(await ruby["LOAD_PATH"]);
         print(await ruby["File"]);
 
-        StarObjectClass loadPATH = await ruby["LOAD_PATH"];
+        StarObjectClass loadPATH =
+            await (ruby["LOAD_PATH"] as FutureOr<StarObjectClass>);
         print(loadPATH);
         await loadPATH.call("unshift", [docPath]);
 
-        bool isAndroid = await Starflut.isAndroid();
-        if( isAndroid == true ){
-          await Starflut.copyFileFromAssets("testcallback.rb", "flutter_assets/starfiles","flutter_assets/starfiles");
+        bool? isAndroid = await Starflut.isAndroid();
+        if (isAndroid == true) {
+          await Starflut.copyFileFromAssets("testcallback.rb",
+              "flutter_assets/starfiles", "flutter_assets/starfiles");
           await Starflut.loadLibrary("libruby.so");
         }
 
-        await SrvGroup.doFile("ruby", assetsPath + "/flutter_assets/starfiles/" + "testcallback.rb");
+        await SrvGroup.doFile("ruby",
+            assetsPath + "/flutter_assets/starfiles/" + "testcallback.rb");
 
         var srvp = await SrvGroup.getServicePath();
         print("$srvp");
@@ -581,171 +619,211 @@ class _MyAppState extends State<MyApp> {
         print(await ruby["\$g1"]);
         print("\$g1");
 
-        StarObjectClass CallBackObj = await Service.newObject(null,[]);
+        StarObjectClass CallBackObj =
+            await (Service.newObject(null, []) as FutureOr<StarObjectClass>);
         await ruby.setValue("\$CallBackObj", CallBackObj);
 
-        await CallBackObj.regScriptProcP("PrintHello", (StarObjectClass cleObject, String FrameTag,List paras ) async {
+        await CallBackObj.regScriptProcP("PrintHello",
+            (StarObjectClass cleObject, String FrameTag, List? paras) async {
           print("$paras");
-          return ["return from ruby", {"pa":1, "pb":2, "pc":3},345.4];
+          return [
+            "return from ruby",
+            {"pa": 1, "pb": 2, "pc": 3},
+            345.4
+          ];
         });
 
-        StarObjectClass rrr = await ruby.call("tt", [{"a":1, "b":2, "c":3}, "world"]);
+        StarObjectClass rrr = await (ruby.call("tt", [
+          {"a": 1, "b": 2, "c": 3},
+          "world"
+        ]) as FutureOr<StarObjectClass>);
         print("return from ruby $rrr");
 
         var rw = await rrr.rawToParaPkg();
         print(rw);
-      }else if (TestCase == 6) {
+      } else if (TestCase == 6) {
         /*ios  only*/
-        StarCoreFactory starcore = await Starflut.getFactory();
-        StarServiceClass Service = await starcore.initSimple("test", "123", 0, 0, []);
+        StarCoreFactory starcore =
+            await (Starflut.getFactory() as FutureOr<StarCoreFactory>);
+        StarServiceClass Service = await (starcore
+            .initSimple("test", "123", 0, 0, []) as FutureOr<StarServiceClass>);
         print("$Service");
         await starcore.regMsgCallBackP(
-                (int serviceGroupID, int uMsg, Object wParam, Object lParam) async{
-              print("$serviceGroupID  $uMsg   $wParam   $lParam");
-              return null;
-            });
+            (int serviceGroupID, int uMsg, Object wParam, Object lParam) async {
+          print("$serviceGroupID  $uMsg   $wParam   $lParam");
+          return null;
+        });
         await Service.checkPassword(false);
-        StarSrvGroupClass SrvGroup = await Service["_ServiceGroup"];
+        StarSrvGroupClass SrvGroup =
+            await (Service["_ServiceGroup"] as FutureOr<StarSrvGroupClass>);
         print("$SrvGroup");
 
-        String docPath = await Starflut.getDocumentPath();
+        String? docPath = await Starflut.getDocumentPath();
         print("docPath = $docPath");
 
-        String resPath = await Starflut.getResourcePath();
+        String? resPath = await Starflut.getResourcePath();
         print("resPath = $resPath");
 
-        print(await Service.doFile("","libstar_go.dynlib",""));
-        var goObj = await Service.getObject(null,"GoObject");
+        print(await Service.doFile("", "libstar_go.dynlib", ""));
+        var goObj = await (Service.getObject(null, "GoObject")
+            as FutureOr<StarObjectClass>);
         print(goObj);
 
         print("--------------");
 
-        var result = await goObj.call("PrintHello",["------------1",234.56]);
+        var result = await goObj.call("PrintHello", ["------------1", 234.56]);
         print(result);
 
         print("----call lua---");
-        await SrvGroup.initRaw("lua",Service);
-        StarObjectClass lua = await Service.importRawContext(null,"lua","",false,"");
+        await SrvGroup.initRaw("lua", Service);
+        StarObjectClass lua =
+            await (Service.importRawContext(null, "lua", "", false, "")
+                as FutureOr<StarObjectClass>);
         print(await lua.getString());
 
-        StarObjectClass luapackage = await lua["package"];
-        String luapath = await luapackage["path"];
+        StarObjectClass luapackage =
+            await (lua["package"] as FutureOr<StarObjectClass>);
+        String luapath = await (luapackage["path"] as FutureOr<String>);
         print(luapath);
 
-        bool isAndroid = await Starflut.isAndroid();
-        if( isAndroid == true ){
-          await Starflut.copyFileFromAssets("mymath.lua", "flutter_assets/starfiles","flutter_assets/starfiles");
+        bool? isAndroid = await Starflut.isAndroid();
+        if (isAndroid == true) {
+          await Starflut.copyFileFromAssets("mymath.lua",
+              "flutter_assets/starfiles", "flutter_assets/starfiles");
         }
 
-        await luapackage.setValue("path",luapath + ";$resPath/flutter_assets/starfiles/?.lua");
+        await luapackage.setValue(
+            "path", luapath + ";$resPath/flutter_assets/starfiles/?.lua");
         print(await luapackage["path"]);
-        await lua.call("execute",['mymath=require \"mymath\"']);
+        await lua.call("execute", ['mymath=require \"mymath\"']);
 
-        StarObjectClass mymath = await lua["mymath"];
-        print(await mymath.call("add",[3334,5666]));
-
-      }else if (TestCase == 7) {
-        StarCoreFactory starcore = await Starflut.getFactory();
-        StarServiceClass Service = await starcore.initSimple("test", "123", 0, 0, []);
+        StarObjectClass mymath =
+            await (lua["mymath"] as FutureOr<StarObjectClass>);
+        print(await mymath.call("add", [3334, 5666]));
+      } else if (TestCase == 7) {
+        StarCoreFactory starcore =
+            await (Starflut.getFactory() as FutureOr<StarCoreFactory>);
+        StarServiceClass Service = await (starcore
+            .initSimple("test", "123", 0, 0, []) as FutureOr<StarServiceClass>);
         print("$Service");
         await starcore.regMsgCallBackP(
-                (int serviceGroupID, int uMsg, Object wParam, Object lParam) async{
-              print("$serviceGroupID  $uMsg   $wParam   $lParam");
-              return null;
-            });
+            (int serviceGroupID, int uMsg, Object wParam, Object lParam) async {
+          print("$serviceGroupID  $uMsg   $wParam   $lParam");
+          return null;
+        });
         await Service.checkPassword(false);
-        StarSrvGroupClass SrvGroup = await Service["_ServiceGroup"];
+        StarSrvGroupClass SrvGroup =
+            await (Service["_ServiceGroup"] as FutureOr<StarSrvGroupClass>);
         print("$SrvGroup");
 
-        String docPath = await Starflut.getDocumentPath();
+        String? docPath = await Starflut.getDocumentPath();
         print("docPath = $docPath");
 
-        String resPath = await Starflut.getResourcePath();
+        String? resPath = await Starflut.getResourcePath();
         print("resPath = $resPath");
 
         print("----call lua---");
-        await SrvGroup.initRaw("lua",Service);
-        StarObjectClass lua = await Service.importRawContext(null,"lua","",false,"");
+        await SrvGroup.initRaw("lua", Service);
+        StarObjectClass lua =
+            await (Service.importRawContext(null, "lua", "", false, "")
+                as FutureOr<StarObjectClass>);
         print(await lua.getString());
 
-        StarObjectClass luapackage = await lua["package"];
-        String luapath = await luapackage["path"];
+        StarObjectClass luapackage =
+            await (lua["package"] as FutureOr<StarObjectClass>);
+        String luapath = await (luapackage["path"] as FutureOr<String>);
         print(luapath);
 
-        bool isAndroid = await Starflut.isAndroid();
-        if( isAndroid == true ){
-          await Starflut.copyFileFromAssets("mymath.lua", "flutter_assets/starfiles","flutter_assets/starfiles");
+        bool? isAndroid = await Starflut.isAndroid();
+        if (isAndroid == true) {
+          await Starflut.copyFileFromAssets("mymath.lua",
+              "flutter_assets/starfiles", "flutter_assets/starfiles");
         }
 
-        await luapackage.setValue("path",luapath + ";$resPath/flutter_assets/starfiles/?.lua");
+        await luapackage.setValue(
+            "path", luapath + ";$resPath/flutter_assets/starfiles/?.lua");
         print(await luapackage["path"]);
-        await lua.call("execute",['mymath=require \"mymath\"']);
+        await lua.call("execute", ['mymath=require \"mymath\"']);
 
-        StarObjectClass mymath = await lua["mymath"];
-        print(await mymath.call("add",[3334,5666]));
-
-      }else if (TestCase == 8) {
-        StarCoreFactory starcore = await Starflut.getFactory();
-        StarServiceClass Service = await starcore.initSimple("test", "123", 0, 0, []);
+        StarObjectClass mymath =
+            await (lua["mymath"] as FutureOr<StarObjectClass>);
+        print(await mymath.call("add", [3334, 5666]));
+      } else if (TestCase == 8) {
+        StarCoreFactory starcore =
+            await (Starflut.getFactory() as FutureOr<StarCoreFactory>);
+        StarServiceClass Service = await (starcore
+            .initSimple("test", "123", 0, 0, []) as FutureOr<StarServiceClass>);
         print("$Service");
         await starcore.regMsgCallBackP(
-                (int serviceGroupID, int uMsg, Object wParam, Object lParam) async{
-              print("$serviceGroupID  $uMsg   $wParam   $lParam");
-              return null;
-            });
+            (int serviceGroupID, int uMsg, Object wParam, Object lParam) async {
+          print("$serviceGroupID  $uMsg   $wParam   $lParam");
+          return null;
+        });
         await Service.checkPassword(false);
-        StarSrvGroupClass SrvGroup = await Service["_ServiceGroup"];
+        StarSrvGroupClass SrvGroup =
+            await (Service["_ServiceGroup"] as FutureOr<StarSrvGroupClass>);
         print("$SrvGroup");
 
-        String docPath = await Starflut.getDocumentPath();
+        String? docPath = await Starflut.getDocumentPath();
         print("docPath = $docPath");
 
-        String resPath = await Starflut.getResourcePath();
+        String? resPath = await Starflut.getResourcePath();
         print("resPath = $resPath");
 
-        StarObjectClass testObj = await Service.newObject(null,[]);
+        StarObjectClass testObj =
+            await (Service.newObject(null, []) as FutureOr<StarObjectClass>);
 
-        await testObj.regScriptProcP("GetInfo", (StarObjectClass cleObject,String FrameTag, List paras ) async {
+        await testObj.regScriptProcP("GetInfo",
+            (StarObjectClass cleObject, String FrameTag, List? paras) async {
           print("$paras");
-          return ["return from ", {"pa":1, "pb":2, "pc":3},345.4];
+          return [
+            "return from ",
+            {"pa": 1, "pb": 2, "pc": 3},
+            345.4
+          ];
         });
 
-        StarObjectClass testObj_inst = await testObj.newObject([]);
-        int InstNumber = await testObj.instNumber();
+        StarObjectClass? testObj_inst = await testObj.newObject([]);
+        int? InstNumber = await testObj.instNumber();
         print("$InstNumber");
 
-        List allobjects = await Service.allObject(null);
+        List? allobjects = await Service.allObject(null);
         print("$allobjects");
 
-        StarParaPkgClass ParaPkg = await SrvGroup.newParaPkg(null,[
+        StarParaPkgClass ParaPkg = await (SrvGroup.newParaPkg(null, [
           'aaaa',
           234,
           [345]
-        ]);
+        ]) as FutureOr<StarParaPkgClass>);
 
-        String val = await ParaPkg.v;
+        String? val = await ParaPkg.v;
         print("$val");
 
-        StarParaPkgClass ParaPkg1 = await SrvGroup.newParaPkg(null,[
+        StarParaPkgClass ParaPkg1 = await (SrvGroup.newParaPkg(null, [
           'aaaab',
           234,
           [345]
-        ]);
-        StarParaPkgClass ParaPkg2 = await SrvGroup.newParaPkg(null,[
+        ]) as FutureOr<StarParaPkgClass>);
+        StarParaPkgClass ParaPkg2 = await (SrvGroup.newParaPkg(null, [
           'aaaa',
           234,
           [345]
-        ]);
-        bool e1 = await ParaPkg.equals(ParaPkg1);
+        ]) as FutureOr<StarParaPkgClass>);
+        bool? e1 = await ParaPkg.equals(ParaPkg1);
         print("$e1");
-        bool e2 = await ParaPkg.equals(ParaPkg2);
+        bool? e2 = await ParaPkg.equals(ParaPkg2);
         print("$e2");
 
-        String res = await testObj.jsonCall("{\"jsonrpc\": \"2.0\", \"method\": \"GetInfo\", \"params\": [34,{\"sape\":4139,\"jack\":4098}], \"id\": 1}");
+        String? res = await testObj.jsonCall(
+            "{\"jsonrpc\": \"2.0\", \"method\": \"GetInfo\", \"params\": [34,{\"sape\":4139,\"jack\":4098}], \"id\": 1}");
         print("$res");
 
-        String objid = await testObj.getValue("_ID");
-        List res1 = await Service.restfulCall(null,"/"+objid+"/proc/GetInfo","POST","{\"params\": [34,{\"sape\":4139,\"jack\":4098}]}");
+        String objid = await (testObj.getValue("_ID") as FutureOr<String>);
+        List? res1 = await Service.restfulCall(
+            null,
+            "/" + objid + "/proc/GetInfo",
+            "POST",
+            "{\"params\": [34,{\"sape\":4139,\"jack\":4098}]}");
         print("$res1");
       }
     } on PlatformException catch (e) {
