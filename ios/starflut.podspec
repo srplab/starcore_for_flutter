@@ -18,7 +18,7 @@ bridge for flutter interact with other programming languages, such as c/c++ lua,
   #s.public_header_files = 'Classes/**/*.h'  #do not set this
 
   s.dependency 'Flutter'
-  s.platform = :ios, '8.0'
+  s.platform = :ios, '9.0'
 
   current_path_ori = __FILE__
   current_path = current_path_ori[0..current_path_ori.rindex("/")-1]    # Dir::pwd
@@ -29,7 +29,7 @@ bridge for flutter interact with other programming languages, such as c/c++ lua,
   # v_STARCORE_PYTHONVERSION = ENV['STARCORE_PYTHONVERSION']           # '3.9'  '3.8'  3.7' '3.6'   '3.5'    '2.7'
   # v_STARCORE_PYTHONCOREPATH = ENV['STARCORE_PYTHONCOREPATH']         # the folder of 'python3.6m' 'python3.6.zip' or 'python3.7m','pyton3.7.zip'...
 
-  v_STARCORE_PATH = current_path+"/starcore_for_ios"                 
+  v_STARCORE_PATH = current_path                 
   v_STARCORE_PYTHONVERSION = '3.9'
   v_STARCORE_PYTHONCOREPATH =current_path+"/python_ios" 
 
@@ -41,7 +41,6 @@ bridge for flutter interact with other programming languages, such as c/c++ lua,
   #other share library
   #for GetExportFunctionTable function, user this
   v_STARCORE_GETEXPORTFUNCTIONTABLENAME = ENV['STARCORE_GETEXPORTFUNCTIONTABLENAME']  # 'xxx_GetExportFunctionTable,yyy_GetExportFunctionTable'
-
   #or else, use this
   v_STARCORE_EXPORTFUNCTIONDEFINE = ENV['STARCORE_EXPORTFUNCTIONDEFINE'] # 'extern \"C\" void *xxx();extern \"C\" void *yyy();'
   v_STARCORE_EXPORTFUNCTIONNAME = ENV['STARCORE_EXPORTFUNCTIONNAME'] # 'xxx,yyy'
@@ -116,22 +115,6 @@ bridge for flutter interact with other programming languages, such as c/c++ lua,
         link_flags =  link_flags + ['star_python39','python3.9']
         system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.9.zip'+' '+current_path+'/python3.9.zip'
         s.resource = ['python3.9.zip']
-    elsif( v_STARCORE_PYTHONVERSION == "3.8" ) then
-        link_flags =  link_flags + ['star_python38','python3.8']
-        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.8.zip'+' '+current_path+'/python3.8.zip'
-        s.resource = ['python3.8.zip']
-    elsif( v_STARCORE_PYTHONVERSION == "3.7" ) then
-        link_flags =  link_flags + ['star_python37','python3.7m']
-        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.7.zip'+' '+current_path+'/python3.7.zip'
-        s.resource = ['python3.7.zip']
-    elsif( v_STARCORE_PYTHONVERSION == "3.6" ) then
-        link_flags =  link_flags + ['star_python36','python3.6m']
-        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.6.zip'+' '+current_path+'/python3.6.zip'
-        s.resource = ['python3.6.zip']
-    elsif( v_STARCORE_PYTHONVERSION == "3.5" ) then
-        link_flags =  link_flags + ['star_python35','python3.5m']
-        system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python3.5.zip'+' '+current_path+'/python3.5.zip'
-        s.resource = ['python3.5.zip']
     elsif( v_STARCORE_PYTHONVERSION == "2.7" ) then
         link_flags =  link_flags + ['starpy','python2.7']
         system 'ln -s -f '+v_STARCORE_PYTHONCOREPATH+'/python2.7.zip'+' '+current_path+'/python2.7.zip'
