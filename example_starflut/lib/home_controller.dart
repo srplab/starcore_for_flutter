@@ -1,13 +1,14 @@
-// ignore_for_file: unnecessary_overrides, non_constant_identifier_names
+import 'dart:io';
 
 import 'package:flutter/services.dart';
 import 'package:get/get.dart';
+import 'package:path_provider/path_provider.dart';
 import 'package:starflut/starflut.dart';
 
 class HomeController extends GetxController {
   StarCoreFactory? starcore;
   StarServiceClass? starService;
-  StarSrvGroupClass? SrvGroup;
+  StarSrvGroupClass? srvGroup;
   StarObjectClass? python;
 
   @override
@@ -19,9 +20,12 @@ class HomeController extends GetxController {
   Future<void> runPythonCode() async {
     try {
       String? resPath = await Starflut.getResourcePath();
-      await SrvGroup?.initRaw("python36", starService!);
-      await SrvGroup?.loadRawModule(
-          "python", "", "$resPath/flutter_assets/starfiles/main.py", false);
+      if (resPath == null) return;
+
+      await srvGroup?.initRaw("python39", starService!);
+      var file =
+          await _getFileFromAssets('starfiles/main.py', loadCached: false);
+      await srvGroup?.loadRawModule("python", "", file.path, false);
 
       python = await starService?.importRawContext("", "python", "", false, "");
 
@@ -44,9 +48,11 @@ class HomeController extends GetxController {
           await calculator?.newObject(["", "", 33, 44]);
 
       // call methods of calculator class
-      var mltply = await calculatorInstance?.call("multiply", [5, 10]);
+      var mltply = await calculatorInstance
+          ?.call("multiply", [calculatorInstance, 5, 10]);
       Get.log("Multiply : $mltply");
-      var add = await calculatorInstance?.call('add', [5, 10]);
+      var add =
+          await calculatorInstance?.call('add', [calculatorInstance, 5, 10]);
       Get.log("Add : $add");
     } on PlatformException catch (e) {
       Get.log("{$e.message}");
@@ -57,7 +63,7 @@ class HomeController extends GetxController {
     starcore = await Starflut.getFactory();
     starService = await starcore?.initSimple("test", "123", 0, 0, []);
     await starcore?.regMsgCallBackP(_messageCallback);
-    SrvGroup = await starService?["_ServiceGroup"] as StarSrvGroupClass?;
+    srvGroup = await starService?["_ServiceGroup"] as StarSrvGroupClass?;
     if (GetPlatform.isAndroid) await _loadAndroidAssets();
   }
 
@@ -70,18 +76,49 @@ class HomeController extends GetxController {
   }
 
   Future<void> _loadAndroidAssets() async {
+    // Load python files
     await Starflut.copyFileFromAssets(
         "main.py", "flutter_assets/starfiles", "flutter_assets/starfiles");
+
+    // Load python libraries
+    await Starflut.copyFileFromAssets("python3.9.zip", null, null);
+    String? nativepath = await Starflut.getNativeLibraryDir();
+    if (nativepath == null) return;
+    var libraryPath = "";
+    if (nativepath.contains("x86_64")) {
+      libraryPath = "x86_64";
+    } else if (nativepath.contains("arm64")) {
+      libraryPath = "arm64-v8a";
+    } else if (nativepath.contains("arm")) {
+      libraryPath = "armeabi";
+    } else if (nativepath.contains("x86")) {
+      libraryPath = "x86";
+    }
+    await Starflut.copyFileFromAssets("zlib.cpython-39.so", libraryPath, null);
     await Starflut.copyFileFromAssets(
-        "python3.6.zip", "flutter_assets/starfiles", null);
-    await Starflut.copyFileFromAssets("zlib.cpython-36m.so", null, null);
-    await Starflut.copyFileFromAssets("unicodedata.cpython-36m.so", null, null);
-    await Starflut.loadLibrary("libpython3.6m.so");
+        "unicodedata.cpython-39.so", libraryPath, null);
+    await Starflut.loadLibrary("libpython3.9.so");
+  }
+
+  Future<File> _getFileFromAssets(String path,
+      {bool loadCached = false}) async {
+    Directory tempDir = await getTemporaryDirectory();
+    String tempPath = tempDir.path;
+    var filePath = "$tempPath/$path";
+    var file = File(filePath);
+    if (loadCached && file.existsSync()) {
+      return file;
+    }
+    final byteData = await rootBundle.load(path);
+    final buffer = byteData.buffer;
+    await file.create(recursive: true);
+    return file.writeAsBytes(
+        buffer.asUint8List(byteData.offsetInBytes, byteData.lengthInBytes));
   }
 
   @override
   void dispose() async {
-    await SrvGroup?.clearService();
+    await srvGroup?.clearService();
     await starcore?.moduleExit();
     super.dispose();
   }

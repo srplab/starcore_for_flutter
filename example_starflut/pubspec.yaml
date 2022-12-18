@@ -10,6 +10,7 @@ dependencies:
     sdk: flutter
   cupertino_icons: ^1.0.2
   get: ^4.6.5
+  path_provider: ^2.0.11
   starflut:
     path: ../
   # starflut:
@@ -29,3 +30,4 @@ flutter:
   uses-material-design: true
   assets:
     - starfiles/
+    - starfiles/main.py
