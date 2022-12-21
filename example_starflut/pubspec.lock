@@ -222,8 +222,8 @@ packages:
   starflut:
     dependency: "direct main"
     description:
-      path: "/Users/rohitsangwan/Drive/Devlopment/flutter_plugins/starcore_for_flutter/"
-      relative: false
+      path: ".."
+      relative: true
     source: path
     version: "2.0.0"
   stream_channel:

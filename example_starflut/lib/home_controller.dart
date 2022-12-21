@@ -1,3 +1,5 @@
+// ignore_for_file: prefer_typing_uninitialized_variables
+
 import 'dart:io';
 
 import 'package:flutter/services.dart';
@@ -29,17 +31,15 @@ class HomeController extends GetxController {
 
       python = await starService?.importRawContext("", "python", "", false, "");
 
-      /// Calling all methods from starfiles/main.py file
+      // Calling all methods from starfiles/main.py file
 
       // Get testValue from Python
       var testValue = await python?["testValue"];
-      Get.log("testValue : $testValue");
 
       // Call getJsonValue method from python
       StarObjectClass? retobj = await python
           ?.call("getJsonValue", ["Rohit", "24"]) as StarObjectClass?;
       var result = await retobj?.getValue('extra');
-      Get.log("getJsonValue.extra :  $result");
 
       // Call Calculator class from python
       StarObjectClass? calculator = await starService?.importRawContext(
@@ -47,12 +47,24 @@ class HomeController extends GetxController {
       StarObjectClass? calculatorInstance =
           await calculator?.newObject(["", "", 33, 44]);
 
+      var mltply;
+      var add;
       // call methods of calculator class
-      var mltply = await calculatorInstance
-          ?.call("multiply", [calculatorInstance, 5, 10]);
+      if (GetPlatform.isMobile) {
+        // for mobile we have to pass self -> instance
+        mltply = await calculatorInstance
+            ?.call("multiply", [calculatorInstance, 5, 10]);
+        add =
+            await calculatorInstance?.call('add', [calculatorInstance, 5, 10]);
+      } else if (GetPlatform.isDesktop) {
+        // we don't have to pass instance on desktop
+        mltply = await calculatorInstance?.call("multiply", [5, 10]);
+        add = await calculatorInstance?.call('add', [5, 10]);
+      }
+
+      Get.log("testValue : $testValue");
+      Get.log("getJsonValue.extra :  $result");
       Get.log("Multiply : $mltply");
-      var add =
-          await calculatorInstance?.call('add', [calculatorInstance, 5, 10]);
       Get.log("Add : $add");
     } on PlatformException catch (e) {
       Get.log("{$e.message}");

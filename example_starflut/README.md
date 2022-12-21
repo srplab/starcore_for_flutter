@@ -4,8 +4,8 @@ Example of running python using Starflut
 
 ## Getting Started
 
-This Example is working successfully in :
+This Example is working successfully on these platforms yet :
 
 Android :
-
-Working on other platforms :
+IOS :
+Windows :

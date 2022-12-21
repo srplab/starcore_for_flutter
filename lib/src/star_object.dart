@@ -90,7 +90,7 @@ class StarObjectClass extends StarCoreBase {
   }
 
   /*--StarObjectClass_get--*/
-  Future<Object?> getValue(Object indexOrNameOrList) async {
+  Future getValue(Object indexOrNameOrList) async {
     try {
       await Starflut.gc();
       Object? result = await Starflut.channel.invokeMethod(
